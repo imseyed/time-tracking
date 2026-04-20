@@ -5,46 +5,148 @@
 
   let currentUser = null
   let view = 'entry'
-  let message = ''
-  let error = ''
 
   let loginForm = { username: 'admin', password: 'public' }
   let users = []
   let projects = []
   let reportDetails = []
+  let dailyChart = []
   let recentEntries = []
+  let summary = { entries_count: 0, total_hours: 0 }
 
-  const todayJ = toJalali(new Date().toISOString().slice(0, 10))
-  const thirtyDaysAgo = new Date(Date.now() - 29 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+  let form = {
+    user_id: '',
+    project_id: '',
+    work_date_jalali: '',
+    start_time: '',
+    end_time: '',
+    description: ''
+  }
 
-  let form = { user_id: '', project_id: '', work_date_j: todayJ, start_time: '', end_time: '', description: '' }
-  let reportFilter = { user_id: '', project_id: '', from_date_j: toJalali(thirtyDaysAgo), to_date_j: todayJ }
-
-  let userForm = { full_name: '', username: '', password: '', role: 'user' }
-  let selectedUser = null
+  let reportFilter = { user_id: '', project_id: '', from_date_jalali: '', to_date_jalali: '' }
+  let userForm = { id: '', full_name: '', username: '', password: '', role: 'user' }
   let projectForm = { id: '', name: '', color: '#FC572C' }
+
+  let message = ''
+  let error = ''
+  let userAction = 'none'
+  let projectAction = 'list'
 
   const menuByRole = {
     admin: [
-      { key: 'entry', label: '⏱️ ثبت ساعت' },
-      { key: 'report', label: '📊 گزارش‌گیری' },
-      { key: 'users', label: '👥 مدیریت کاربران' },
-      { key: 'projects', label: '🗂️ مدیریت پروژه‌ها' }
+      { key: 'entry', label: 'ثبت ساعت', icon: '⏱️' },
+      { key: 'report', label: 'گزارش‌گیری', icon: '📊' },
+      { key: 'users', label: 'کاربران', icon: '👥' },
+      { key: 'projects', label: 'پروژه‌ها', icon: '📁' }
     ],
     user: [
-      { key: 'entry', label: '⏱️ ثبت ساعت' },
-      { key: 'report', label: '📊 گزارش من' }
+      { key: 'entry', label: 'ثبت ساعت', icon: '⏱️' },
+      { key: 'report', label: 'گزارش من', icon: '📊' }
     ]
   }
 
-  $: menu = currentUser ? menuByRole[currentUser.role] ?? [] : []
-  $: dailyChart = buildDailyChart(reportDetails, reportFilter.from_date_j, reportFilter.to_date_j)
-  $: maxDaily = Math.max(1, ...dailyChart.map((d) => d.hours))
-
-  function clearAlerts() {
-    message = ''
-    error = ''
+  // Jalali conversion
+  function div(a, b) { return Math.floor(a / b) }
+  function g2d(gy, gm, gd) {
+    let d = div((gy + div(gm - 8, 6) + 100100) * 1461, 4) + div(153 * ((gm + 9) % 12) + 2, 5) + gd - 34840408
+    d = d - div(div(gy + 100100 + div(gm - 8, 6), 100) * 3, 4) + 752
+    return d
   }
+  function d2g(jdn) {
+    let j = 4 * jdn + 139361631
+    j = j + div(div(4 * jdn + 183187720, 146097) * 3, 4) * 4 - 3908
+    const i = div((j % 1461), 4) * 5 + 308
+    const gd = div((i % 153), 5) + 1
+    const gm = (div(i, 153) % 12) + 1
+    const gy = div(j, 1461) - 100100 + div(8 - gm, 6)
+    return { gy, gm, gd }
+  }
+  function jalCal(jy) {
+    const breaks = [-61, 9, 38, 199, 426, 686, 756, 818, 1111, 1181, 1210, 1635, 2060, 2097, 2192, 2262, 2324, 2394, 2456, 3178]
+    const bl = breaks.length
+    const gy = jy + 621
+    let leapJ = -14
+    let jp = breaks[0]
+    let jm, jump, leap, n, i
+
+    if (jy < jp || jy >= breaks[bl - 1]) throw new Error('Invalid Jalali year')
+
+    for (i = 1; i < bl; i += 1) {
+      jm = breaks[i]
+      jump = jm - jp
+      if (jy < jm) break
+      leapJ = leapJ + div(jump, 33) * 8 + div((jump % 33), 4)
+      jp = jm
+    }
+    n = jy - jp
+    leapJ = leapJ + div(n, 33) * 8 + div(((n % 33) + 3), 4)
+    if ((jump % 33) === 4 && jump - n === 4) leapJ += 1
+    const leapG = div(gy, 4) - div((div(gy, 100) + 1) * 3, 4) - 150
+    const march = 20 + leapJ - leapG
+    if (jump - n < 6) n = n - jump + div(jump + 4, 33) * 33
+    leap = ((((n + 1) % 33) - 1) % 4)
+    if (leap === -1) leap = 4
+    return { leap, gy, march }
+  }
+  function j2d(jy, jm, jd) {
+    const r = jalCal(jy)
+    return g2d(r.gy, 3, r.march) + (jm - 1) * 31 - div(jm, 7) * (jm - 7) + jd - 1
+  }
+  function d2j(jdn) {
+    const g = d2g(jdn)
+    let jy = g.gy - 621
+    const r = jalCal(jy)
+    const jdn1f = g2d(g.gy, 3, r.march)
+    let jd, jm, k
+    k = jdn - jdn1f
+    if (k >= 0) {
+      if (k <= 185) {
+        jm = 1 + div(k, 31)
+        jd = (k % 31) + 1
+        return { jy, jm, jd }
+      }
+      k -= 186
+    } else {
+      jy -= 1
+      k += 179
+      if (r.leap === 1) k += 1
+    }
+    jm = 7 + div(k, 30)
+    jd = (k % 30) + 1
+    return { jy, jm, jd }
+  }
+
+  const pad = (n) => String(n).padStart(2, '0')
+  function gregorianToJalali(dateStr) {
+    if (!dateStr) return ''
+    const [gy, gm, gd] = dateStr.split('-').map(Number)
+    const j = d2j(g2d(gy, gm, gd))
+    return `${j.jy}/${pad(j.jm)}/${pad(j.jd)}`
+  }
+  function jalaliToGregorian(dateStr) {
+    if (!dateStr) return ''
+    const parts = dateStr.split('/').map(Number)
+    if (parts.length !== 3 || parts.some(Number.isNaN)) return ''
+    const g = d2g(j2d(parts[0], parts[1], parts[2]))
+    return `${g.gy}-${pad(g.gm)}-${pad(g.gd)}`
+  }
+
+  function setDefaultReportRange() {
+    const today = new Date()
+    const past = new Date()
+    past.setDate(today.getDate() - 29)
+    const t = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`
+    const p = `${past.getFullYear()}-${pad(past.getMonth() + 1)}-${pad(past.getDate())}`
+    reportFilter.from_date_jalali = gregorianToJalali(p)
+    reportFilter.to_date_jalali = gregorianToJalali(t)
+    form.work_date_jalali = gregorianToJalali(t)
+  }
+
+  const toHours = (m) => (Number(m) / 60).toFixed(2)
+  $: maxDaily = Math.max(1, ...dailyChart.map((d) => Number(d.total_minutes || 0)))
+  $: userMenu = currentUser ? menuByRole[currentUser.role] ?? [] : []
+
+  function clearAlerts() { error = '' }
 
   function authParams() {
     return currentUser ? `&auth_user_id=${currentUser.id}` : ''
@@ -54,10 +156,9 @@
     const url = `${API_BASE}?action=${action}${method === 'GET' ? authParams() : ''}`
     const options = { method, headers: { 'Content-Type': 'application/json' } }
     if (method !== 'GET') options.body = JSON.stringify({ ...(payload || {}), auth_user_id: currentUser?.id })
-
     const res = await fetch(url, options)
     const json = await res.json()
-    if (!res.ok) throw new Error(json.error || 'خطا در ارتباط با سرور')
+    if (!res.ok) throw new Error(json.error || 'خطا')
     return json
   }
 
@@ -69,7 +170,7 @@
       localStorage.setItem('tt_user', JSON.stringify(currentUser))
       form.user_id = String(currentUser.id)
       await loadAppData()
-      message = `✅ خوش آمدید ${currentUser.full_name}`
+      message = `خوش آمدید ${currentUser.full_name}`
     } catch (e) {
       error = e.message
     }
@@ -78,8 +179,8 @@
   function logout() {
     currentUser = null
     localStorage.removeItem('tt_user')
-    view = 'entry'
-    clearAlerts()
+    message = ''
+    error = ''
   }
 
   async function loadUsers() {
@@ -95,23 +196,28 @@
   }
 
   async function loadRecentEntries() {
-    const json = await request('entry-recent')
-    recentEntries = json.data || []
+    const json = await request('entries-recent')
+    recentEntries = (json.data || []).map((r) => ({ ...r, work_date_j: gregorianToJalali(r.work_date) }))
   }
 
-  async function loadReport(showMessage = false) {
-    if (!showMessage) clearAlerts()
+  async function loadReport() {
+    clearAlerts()
     try {
       const qs = new URLSearchParams({ action: 'report', auth_user_id: String(currentUser.id) })
       if (reportFilter.user_id) qs.set('user_id', reportFilter.user_id)
       if (reportFilter.project_id) qs.set('project_id', reportFilter.project_id)
-      if (reportFilter.from_date_j) qs.set('from_date', toGregorian(reportFilter.from_date_j))
-      if (reportFilter.to_date_j) qs.set('to_date', toGregorian(reportFilter.to_date_j))
+      const fromG = jalaliToGregorian(reportFilter.from_date_jalali)
+      const toG = jalaliToGregorian(reportFilter.to_date_jalali)
+      if (fromG) qs.set('from_date', fromG)
+      if (toG) qs.set('to_date', toG)
 
       const res = await fetch(`${API_BASE}?${qs.toString()}`)
       const json = await res.json()
-      if (!res.ok) throw new Error(json.error || 'خطا در گزارش')
-      reportDetails = json.details || []
+      if (!res.ok) throw new Error(json.error || 'گزارش دریافت نشد.')
+
+      reportDetails = (json.details || []).map((r) => ({ ...r, work_date_j: gregorianToJalali(r.work_date) }))
+      dailyChart = (json.daily_chart || []).map((d) => ({ ...d, work_date_j: gregorianToJalali(d.work_date) }))
+      summary = json.summary || summary
     } catch (e) {
       error = e.message
     }
@@ -120,39 +226,42 @@
   async function submitEntry() {
     clearAlerts()
     try {
-      await request('entry-create', 'POST', {
+      const workDate = jalaliToGregorian(form.work_date_jalali)
+      if (!workDate) throw new Error('تاریخ شمسی معتبر نیست. مثال: 1405/01/31')
+      const payload = {
         ...form,
-        work_date: toGregorian(form.work_date_j),
+        work_date: workDate,
         user_id: Number(form.user_id),
         project_id: Number(form.project_id)
-      })
-      message = '✅ ثبت ساعت با موفقیت انجام شد.'
+      }
+      await request('entry-create', 'POST', payload)
+      message = '✅ ساعت کاری با موفقیت ثبت شد.'
       form.start_time = ''
       form.end_time = ''
       form.description = ''
       await loadRecentEntries()
-      await loadReport(true)
     } catch (e) {
       error = e.message
     }
   }
 
-  async function createUser() {
-    clearAlerts()
-    try {
-      await request('user-create', 'POST', userForm)
-      message = '✅ کاربر ایجاد شد.'
-      userForm = { full_name: '', username: '', password: '', role: 'user' }
-      await loadUsers()
-    } catch (e) { error = e.message }
+  function pickUser(u) {
+    userForm = { id: String(u.id), full_name: u.full_name, username: u.username, password: '', role: u.role }
+    userAction = 'edit'
   }
 
-  async function editUser() {
-    if (!selectedUser) return
+  async function saveUser() {
     clearAlerts()
     try {
-      await request('user-update', 'POST', selectedUser)
-      message = '✅ کاربر ویرایش شد.'
+      if (userAction === 'create') {
+        await request('user-create', 'POST', userForm)
+        message = '✅ کاربر ایجاد شد.'
+      } else if (userAction === 'edit') {
+        await request('user-update', 'POST', userForm)
+        message = '✅ کاربر ویرایش شد.'
+      }
+      userAction = 'none'
+      userForm = { id: '', full_name: '', username: '', password: '', role: 'user' }
       await loadUsers()
     } catch (e) { error = e.message }
   }
@@ -162,21 +271,26 @@
     try {
       await request('user-delete', 'POST', { id })
       message = '✅ کاربر حذف شد.'
-      if (selectedUser?.id === id) selectedUser = null
       await loadUsers()
     } catch (e) { error = e.message }
+  }
+
+  function pickProject(p) {
+    projectForm = { id: String(p.id), name: p.name, color: p.color }
+    projectAction = 'edit'
   }
 
   async function saveProject() {
     clearAlerts()
     try {
-      if (projectForm.id) {
-        await request('project-update', 'POST', projectForm)
-        message = '✅ پروژه ویرایش شد.'
-      } else {
+      if (projectAction === 'create') {
         await request('project-create', 'POST', projectForm)
         message = '✅ پروژه ایجاد شد.'
+      } else if (projectAction === 'edit') {
+        await request('project-update', 'POST', projectForm)
+        message = '✅ پروژه ویرایش شد.'
       }
+      projectAction = 'list'
       projectForm = { id: '', name: '', color: '#FC572C' }
       await loadProjects()
     } catch (e) { error = e.message }
@@ -191,92 +305,45 @@
     } catch (e) { error = e.message }
   }
 
-  function startEditProject(p) {
-    projectForm = { id: p.id, name: p.name, color: p.color }
-  }
-
-  function startEditUser(u) {
-    selectedUser = { id: u.id, full_name: u.full_name, role: u.role, password: '' }
-  }
-
   async function loadAppData() {
     await loadProjects()
+    if (currentUser.role === 'admin') await loadUsers()
     await loadRecentEntries()
     await loadReport()
-    if (currentUser?.role === 'admin') await loadUsers()
   }
 
   onMount(async () => {
+    setDefaultReportRange()
     const raw = localStorage.getItem('tt_user')
-    if (!raw) return
-    currentUser = JSON.parse(raw)
-    form.user_id = String(currentUser.id)
-    await loadAppData()
-  })
-
-  function toJalali(gDate) {
-    if (!gDate) return ''
-    const [gy, gm, gd] = gDate.split('-').map(Number)
-    const [jy, jm, jd] = d2j(g2d(gy, gm, gd))
-    return `${jy}/${String(jm).padStart(2, '0')}/${String(jd).padStart(2, '0')}`
-  }
-
-  function toGregorian(jDate) {
-    if (!jDate) return ''
-    const [jy, jm, jd] = jDate.split('/').map(Number)
-    const [gy, gm, gd] = d2g(j2d(jy, jm, jd))
-    return `${gy}-${String(gm).padStart(2, '0')}-${String(gd).padStart(2, '0')}`
-  }
-
-  function buildDailyChart(rows, fromJ, toJ) {
-    const out = []
-    if (!fromJ || !toJ) return out
-    const fromG = toGregorian(fromJ)
-    const toG = toGregorian(toJ)
-    let cur = new Date(`${fromG}T00:00:00Z`)
-    const end = new Date(`${toG}T00:00:00Z`)
-
-    const sumByDay = {}
-    for (const r of rows) sumByDay[r.work_date] = (sumByDay[r.work_date] || 0) + Number(r.duration_minutes || 0)
-
-    while (cur <= end) {
-      const y = cur.getUTCFullYear()
-      const m = String(cur.getUTCMonth() + 1).padStart(2, '0')
-      const d = String(cur.getUTCDate()).padStart(2, '0')
-      const key = `${y}-${m}-${d}`
-      out.push({
-        day: toJalali(key).slice(5),
-        hours: Number(((sumByDay[key] || 0) / 60).toFixed(2))
-      })
-      cur = new Date(cur.getTime() + 86400000)
+    if (raw) {
+      currentUser = JSON.parse(raw)
+      form.user_id = String(currentUser.id)
+      await loadAppData()
     }
-    return out
-  }
-
-  function div(a, b) { return ~~(a / b) }
-  function g2d(gy, gm, gd) { let d = div((gy + div(gm - 8, 6) + 100100) * 1461, 4) + div(153 * ((gm + 9) % 12) + 2, 5) + gd - 34840408; d = d - div(div(gy + 100100 + div(gm - 8, 6), 100) * 3, 4) + 752; return d }
-  function d2g(jdn) { let j = 4 * jdn + 139361631; j = j + div(div(4 * jdn + 183187720, 146097) * 3, 4) * 4 - 3908; const i = div((j % 1461), 4) * 5 + 308; const gd = div(i % 153, 5) + 1; const gm = (div(i, 153) % 12) + 1; const gy = div(j, 1461) - 100100 + div(8 - gm, 6); return [gy, gm, gd] }
-  function j2d(jy, jm, jd) { jy += 1595; return -355668 + 365 * jy + div(jy, 33) * 8 + div((jy % 33 + 3), 4) + jd + ((jm < 7) ? (jm - 1) * 31 : (jm - 7) * 30 + 186) }
-  function d2j(jdn) { let jy = -1595 + 33 * div(jdn, 12053); jdn %= 12053; jy += 4 * div(jdn, 1461); jdn %= 1461; if (jdn > 365) { jy += div(jdn - 1, 365); jdn = (jdn - 1) % 365; } const jm = (jdn < 186) ? 1 + div(jdn, 31) : 7 + div(jdn - 186, 30); const jd = 1 + ((jdn < 186) ? (jdn % 31) : ((jdn - 186) % 30)); return [jy, jm, jd] }
+  })
 </script>
 
 {#if !currentUser}
   <main class="auth-page">
-    <section class="card">
-      <h1>🔐 ورود</h1>
-      <p>اکانت پیش‌فرض مدیر: <strong>admin / public</strong></p>
+    <section class="card auth-card">
+      <h1>⏱️ ورود به سامانه</h1>
+      <p>اکانت پیش‌فرض: <strong>admin / public</strong></p>
       {#if error}<div class="alert error">{error}</div>{/if}
-      <label>نام کاربری <input bind:value={loginForm.username} /></label>
-      <label>رمز عبور <input type="password" bind:value={loginForm.password} /></label>
-      <button class="primary" on:click={doLogin}>🚪 ورود</button>
+      <label>👤 نام کاربری <input bind:value={loginForm.username} /></label>
+      <label>🔐 رمز عبور <input type="password" bind:value={loginForm.password} /></label>
+      <button class="primary" on:click={doLogin}>🔓 ورود</button>
     </section>
   </main>
 {:else}
   <main class="panel">
     <aside class="sidebar">
-      <h2>⏰ زمان‌سنجی</h2>
+      <h2>🟧 Time Panel</h2>
       <small>{currentUser.full_name}</small>
-      <nav>{#each menu as m}<button class:active={view === m.key} on:click={() => (view = m.key)}>{m.label}</button>{/each}</nav>
+      <nav>
+        {#each userMenu as item}
+          <button class:active={view === item.key} on:click={() => (view = item.key)}>{item.icon} {item.label}</button>
+        {/each}
+      </nav>
       <button class="logout" on:click={logout}>🚪 خروج</button>
     </aside>
 
@@ -286,24 +353,30 @@
 
       {#if view === 'entry'}
         <div class="card">
-          <h3>⏱️ ثبت ساعت</h3>
+          <h3>⏱️ ثبت ساعت کاری</h3>
           <div class="grid">
             {#if currentUser.role === 'admin'}
-              <label>کاربر
-                <select bind:value={form.user_id}>{#each users as u}<option value={u.id}>{u.full_name}</option>{/each}</select>
+              <label>👤 کاربر
+                <select bind:value={form.user_id}>
+                  {#each users as u}<option value={u.id}>{u.full_name}</option>{/each}
+                </select>
               </label>
             {/if}
-            <label>پروژه
-              <select bind:value={form.project_id}>{#each projects as p}<option value={p.id}>{p.name}</option>{/each}</select>
+            <label>📁 پروژه
+              <select bind:value={form.project_id}>
+                {#each projects as p}<option value={p.id}>{p.name}</option>{/each}
+              </select>
             </label>
-            <label>تاریخ شمسی <input placeholder="1405/01/31" bind:value={form.work_date_j} /></label>
-            <label>شروع <input type="time" bind:value={form.start_time} /></label>
-            <label>پایان <input type="time" bind:value={form.end_time} /></label>
+            <label>📅 تاریخ شمسی (yyyy/mm/dd)
+              <input bind:value={form.work_date_jalali} placeholder="1405/01/31" />
+            </label>
+            <label>🕒 شروع <input type="time" bind:value={form.start_time} /></label>
+            <label>🕕 پایان <input type="time" bind:value={form.end_time} /></label>
           </div>
-          <label>شرح <textarea rows="3" bind:value={form.description}></textarea></label>
-          <button class="primary" on:click={submitEntry}>💾 ثبت</button>
+          <label>📝 شرح کار <textarea rows="3" bind:value={form.description} /></label>
+          <button class="primary" on:click={submitEntry}>💾 ثبت ساعت</button>
 
-          <h4>🕘 25 رکورد اخیر شما</h4>
+          <h4>25 رکورد اخیر شما</h4>
           <div class="table-wrap">
             <table>
               <thead><tr><th>تاریخ</th><th>پروژه</th><th>شروع</th><th>پایان</th><th>دقیقه</th><th>شرح</th></tr></thead>
@@ -311,8 +384,10 @@
                 {#if recentEntries.length === 0}
                   <tr><td colspan="6">رکوردی ثبت نشده است.</td></tr>
                 {:else}
-                  {#each recentEntries as r}
-                    <tr><td>{toJalali(r.work_date)}</td><td>{r.project_name}</td><td>{r.start_time}</td><td>{r.end_time}</td><td>{r.duration_minutes}</td><td>{r.description}</td></tr>
+                  {#each recentEntries as row}
+                    <tr>
+                      <td>{row.work_date_j}</td><td>{row.project_name}</td><td>{row.start_time}</td><td>{row.end_time}</td><td>{row.duration_minutes}</td><td>{row.description}</td>
+                    </tr>
                   {/each}
                 {/if}
               </tbody>
@@ -323,64 +398,78 @@
 
       {#if view === 'users' && currentUser.role === 'admin'}
         <div class="card">
-          <h3>👥 لیست کاربران</h3>
-          <button class="primary" on:click={() => (selectedUser = null)}>➕ ایجاد کاربر جدید</button>
+          <h3>👥 مدیریت کاربران</h3>
+          <div class="actions">
+            <button on:click={() => { userAction='none'; userForm={ id:'', full_name:'', username:'', password:'', role:'user' } }}>📋 لیست کاربران</button>
+            <button on:click={() => { userAction='create'; userForm={ id:'', full_name:'', username:'', password:'', role:'user' } }}>➕ ایجاد</button>
+            <button on:click={() => (userAction='edit')} disabled={!userForm.id}>✏️ ویرایش</button>
+            <button on:click={() => userForm.id && deleteUser(Number(userForm.id))} disabled={!userForm.id}>🗑️ حذف</button>
+          </div>
+
           <div class="table-wrap">
             <table>
-              <thead><tr><th>نام</th><th>نام کاربری</th><th>نقش</th><th>عملیات</th></tr></thead>
+              <thead><tr><th>نام</th><th>نام کاربری</th><th>نقش</th></tr></thead>
               <tbody>
                 {#each users as u}
-                  <tr>
+                  <tr class:selected={String(u.id)===userForm.id} on:click={() => pickUser(u)}>
                     <td>{u.full_name}</td><td>{u.username}</td><td>{u.role}</td>
-                    <td>
-                      <button on:click={() => startEditUser(u)}>✏️ ویرایش</button>
-                      <button on:click={() => deleteUser(u.id)}>🗑️ حذف</button>
-                    </td>
                   </tr>
                 {/each}
               </tbody>
             </table>
           </div>
 
-          <h4>{selectedUser ? 'ویرایش کاربر' : 'ایجاد کاربر'}</h4>
-          {#if selectedUser}
-            <label>نام <input bind:value={selectedUser.full_name} /></label>
-            <label>نقش <select bind:value={selectedUser.role}><option value="user">کاربر</option><option value="admin">ادمین</option></select></label>
-            <label>رمز جدید (اختیاری) <input type="password" bind:value={selectedUser.password} /></label>
-            <button class="primary" on:click={editUser}>✏️ ذخیره ویرایش</button>
-          {:else}
-            <label>نام <input bind:value={userForm.full_name} /></label>
-            <label>نام کاربری <input bind:value={userForm.username} /></label>
-            <label>رمز <input type="password" bind:value={userForm.password} /></label>
-            <label>نقش <select bind:value={userForm.role}><option value="user">کاربر</option><option value="admin">ادمین</option></select></label>
-            <button class="primary" on:click={createUser}>➕ ایجاد</button>
+          {#if userAction === 'create' || userAction === 'edit'}
+            <div class="modal-backdrop" on:click={() => (userAction = 'none')}>
+              <div class="modal" on:click|stopPropagation>
+                <h4>{userAction === 'create' ? 'ایجاد کاربر' : 'ویرایش کاربر'}</h4>
+                <div class="grid">
+                  <label>نام <input bind:value={userForm.full_name} /></label>
+                  <label>نام کاربری <input bind:value={userForm.username} disabled={userAction==='edit'} /></label>
+                  <label>رمز عبور <input type="password" bind:value={userForm.password} placeholder={userAction==='edit' ? 'خالی = بدون تغییر' : ''} /></label>
+                  <label>نقش
+                    <select bind:value={userForm.role}><option value="user">user</option><option value="admin">admin</option></select>
+                  </label>
+                </div>
+                <div class="modal-actions">
+                  <button class="primary" on:click={saveUser}>💾 ذخیره کاربر</button>
+                  <button on:click={() => (userAction = 'none')}>لغو</button>
+                </div>
+              </div>
+            </div>
           {/if}
         </div>
       {/if}
 
       {#if view === 'projects' && currentUser.role === 'admin'}
         <div class="card">
-          <h3>🗂️ مدیریت پروژه‌ها</h3>
-          <label>نام پروژه <input bind:value={projectForm.name} /></label>
-          <label>رنگ <input type="color" bind:value={projectForm.color} /></label>
-          <button class="primary" on:click={saveProject}>{projectForm.id ? '✏️ ذخیره ویرایش' : '➕ ایجاد پروژه'}</button>
-
+          <h3>📁 مدیریت پروژه‌ها</h3>
+          <div class="actions">
+            <button on:click={() => { projectAction='list'; projectForm={ id:'', name:'', color:'#FC572C' } }}>📋 لیست پروژه‌ها</button>
+            <button on:click={() => { projectAction='create'; projectForm={ id:'', name:'', color:'#FC572C' } }}>➕ ایجاد</button>
+            <button on:click={() => (projectAction='edit')} disabled={!projectForm.id}>✏️ ویرایش</button>
+            <button on:click={() => projectForm.id && deleteProject(Number(projectForm.id))} disabled={!projectForm.id}>🗑️ حذف</button>
+          </div>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>نام</th><th>رنگ</th><th>عملیات</th></tr></thead>
+              <thead><tr><th>نام پروژه</th><th>رنگ</th></tr></thead>
               <tbody>
                 {#each projects as p}
-                  <tr>
-                    <td>{p.name}</td><td><span class="color-dot" style={`background:${p.color}`}></span>{p.color}</td>
-                    <td>
-                      <button on:click={() => startEditProject(p)}>✏️ ویرایش</button>
-                      <button on:click={() => deleteProject(p.id)}>🗑️ حذف</button>
-                    </td>
+                  <tr class:selected={String(p.id)===projectForm.id} on:click={() => pickProject(p)}>
+                    <td>{p.name}</td><td><span class="dot" style={`background:${p.color}`}></span> {p.color}</td>
                   </tr>
                 {/each}
               </tbody>
             </table>
           </div>
+
+          {#if projectAction !== 'list'}
+            <div class="grid">
+              <label>نام پروژه <input bind:value={projectForm.name} /></label>
+              <label>رنگ <input type="color" bind:value={projectForm.color} /></label>
+            </div>
+            <button class="primary" on:click={saveProject}>💾 ذخیره پروژه</button>
+          {/if}
         </div>
       {/if}
 
@@ -389,20 +478,29 @@
           <h3>📊 گزارش‌گیری</h3>
           <div class="grid">
             {#if currentUser.role === 'admin'}
-              <label>کاربر <select bind:value={reportFilter.user_id}><option value="">همه</option>{#each users as u}<option value={u.id}>{u.full_name}</option>{/each}</select></label>
+              <label>👤 کاربر
+                <select bind:value={reportFilter.user_id}>
+                  <option value="">همه</option>
+                  {#each users as u}<option value={u.id}>{u.full_name}</option>{/each}
+                </select>
+              </label>
             {/if}
-            <label>پروژه <select bind:value={reportFilter.project_id}><option value="">همه</option>{#each projects as p}<option value={p.id}>{p.name}</option>{/each}</select></label>
-            <label>از تاریخ (شمسی) <input bind:value={reportFilter.from_date_j} placeholder="1405/01/01" /></label>
-            <label>تا تاریخ (شمسی) <input bind:value={reportFilter.to_date_j} placeholder="1405/01/30" /></label>
+            <label>📁 پروژه
+              <select bind:value={reportFilter.project_id}><option value="">همه</option>{#each projects as p}<option value={p.id}>{p.name}</option>{/each}</select>
+            </label>
+            <label>📅 از تاریخ شمسی <input bind:value={reportFilter.from_date_jalali} placeholder="1405/01/01" /></label>
+            <label>📅 تا تاریخ شمسی <input bind:value={reportFilter.to_date_jalali} placeholder="1405/01/30" /></label>
           </div>
-          <button class="primary" on:click={loadReport}>🔍 اعمال فیلتر</button>
+          <button class="primary" on:click={loadReport}>🔎 اعمال فیلتر</button>
 
-          <h4>نمودار عمودی ساعات روزانه</h4>
+          <div class="summary"><span>تعداد: {summary.entries_count}</span><span>کل ساعت: {summary.total_hours}</span></div>
+
+          <h4>نمودار عمودی ساعت روزانه</h4>
           <div class="vchart">
-            {#each dailyChart as day}
-              <div class="bar-col">
-                <div class="bar" style={`height:${(day.hours / maxDaily) * 180}px`} title={`${day.hours}h`}></div>
-                <small>{day.day}</small>
+            {#each dailyChart as d}
+              <div class="vbar-col" title={`${d.work_date_j} - ${toHours(d.total_minutes)}h`}>
+                <div class="vbar" style={`height:${Math.max(8, (Number(d.total_minutes) / maxDaily) * 180)}px`}></div>
+                <small>{d.work_date_j.split('/').slice(1).join('/')}</small>
               </div>
             {/each}
           </div>
@@ -411,11 +509,11 @@
             <table>
               <thead><tr><th>تاریخ</th><th>کاربر</th><th>پروژه</th><th>شروع</th><th>پایان</th><th>دقیقه</th><th>شرح</th></tr></thead>
               <tbody>
-                {#if reportDetails.length === 0}
-                  <tr><td colspan="7">رکوردی یافت نشد.</td></tr>
+                {#if reportDetails.length===0}
+                  <tr><td colspan="7">داده‌ای وجود ندارد.</td></tr>
                 {:else}
-                  {#each reportDetails as r}
-                    <tr><td>{toJalali(r.work_date)}</td><td>{r.user_name}</td><td>{r.project_name}</td><td>{r.start_time}</td><td>{r.end_time}</td><td>{r.duration_minutes}</td><td>{r.description}</td></tr>
+                  {#each reportDetails as row}
+                    <tr><td>{row.work_date_j}</td><td>{row.user_name}</td><td>{row.project_name}</td><td>{row.start_time}</td><td>{row.end_time}</td><td>{row.duration_minutes}</td><td>{row.description}</td></tr>
                   {/each}
                 {/if}
               </tbody>
@@ -430,29 +528,35 @@
 <style>
   @font-face { font-family: 'IRANSansX'; src: url('/fonts/IRANSansXFaNum-Medium.woff2') format('woff2'); font-weight: 500; }
   @font-face { font-family: 'IRANSansX'; src: url('/fonts/IRANSansXFaNum-ExtraBold.woff') format('woff'); font-weight: 800; }
-  :global(body) { margin: 0; font-family: 'IRANSansX', Tahoma, sans-serif; background: #fff7f3; direction: rtl; }
-  .panel { min-height: 100vh; display: grid; grid-template-columns: 280px 1fr; }
-  .sidebar { background: linear-gradient(180deg,#fc572c,#e84a24); color: #fff; padding: 16px; display:flex; flex-direction:column; gap:12px; }
-  nav { display:grid; gap:8px; }
-  button { font: inherit; border: 1px solid #ffccbd; background:#fff; border-radius:10px; padding:9px 10px; cursor:pointer; }
-  nav button,.logout { background: rgba(255,255,255,0.18); border-color: rgba(255,255,255,.35); color:white; }
-  nav button.active { background: #fff; color:#fc572c; font-weight: 800; }
-  .logout { margin-top:auto; }
-  .content { padding: 22px; }
-  .card { background:#fff; border:1px solid #ffd7cb; border-radius:14px; padding:16px; box-shadow:0 8px 24px rgba(252,87,44,.1); }
-  .primary { background:#fc572c; color:white; border-color:#fc572c; }
-  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:10px; }
-  label { display:flex; flex-direction:column; gap:6px; margin-bottom:10px; }
-  input,select,textarea { font: inherit; border:1px solid #ffc7b6; border-radius:10px; padding:9px; }
-  .alert { margin-bottom:10px; padding:10px; border-radius:10px; }
-  .success { background:#ffe7de; color:#8f2a10; }
-  .error { background:#ffe3e3; color:#a02727; }
-  .table-wrap { overflow-x:auto; margin-top:10px; }
-  table { width:100%; border-collapse:collapse; }
-  th,td { border-bottom:1px solid #ffe2d8; text-align:right; padding:8px; }
-  .vchart { display:flex; align-items:flex-end; gap:8px; min-height:220px; padding:8px; overflow-x:auto; border:1px dashed #ffd3c6; border-radius:10px; margin:10px 0; }
-  .bar-col { min-width:28px; display:flex; flex-direction:column; align-items:center; gap:6px; }
-  .bar { width:22px; background:#fc572c; border-radius:7px 7px 0 0; }
-  .color-dot { width:12px; height:12px; border-radius:50%; display:inline-block; margin-left:6px; }
-  .auth-page { min-height:100vh; display:grid; place-items:center; padding:20px; }
+  :global(body){margin:0;font-family:'IRANSansX',Tahoma,sans-serif;background:#fff7f3;color:#333;direction:rtl}
+  .panel{display:grid;grid-template-columns:270px 1fr;min-height:100vh}
+  .sidebar{background:linear-gradient(180deg,#fc572c,#d84a24);color:#fff;padding:16px;display:flex;flex-direction:column;gap:10px}
+  .sidebar button{border:1px solid #ffffff4d;background:#ffffff24;color:#fff;padding:10px;border-radius:10px;text-align:right;cursor:pointer}
+  .sidebar button.active{background:#fff;color:#fc572c;font-weight:800}
+  .logout{margin-top:auto}
+  .content{padding:20px}
+  .card{background:#fff;border:1px solid #ffd9cc;border-radius:14px;padding:16px;box-shadow:0 8px 25px #fc572c1f}
+  .auth-page{min-height:100vh;display:grid;place-items:center;padding:20px}
+  .auth-card{width:min(420px,100%)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+  label{display:flex;flex-direction:column;gap:5px;margin-bottom:10px}
+  input,select,textarea,button{font:inherit;border:1px solid #ffc7b6;border-radius:10px;padding:10px}
+  .primary{background:#fc572c;border-color:#fc572c;color:#fff;cursor:pointer}
+  .actions{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+  .table-wrap{overflow:auto;margin-top:10px}
+  table{width:100%;border-collapse:collapse}
+  th,td{border-bottom:1px solid #ffe2d8;padding:8px;text-align:right}
+  tr.selected{background:#fff1eb}
+  .alert{padding:10px;border-radius:10px;margin-bottom:10px}
+  .success{background:#ffe4d8;color:#8d2c10}.error{background:#ffe8e8;color:#9e1f1f}
+  .dot{display:inline-block;width:12px;height:12px;border-radius:50%}
+  .summary{display:flex;gap:20px;margin:12px 0}
+  .vchart{display:flex;gap:10px;align-items:flex-end;min-height:230px;max-width:100%;padding:10px;background:#fff4ef;border-radius:12px;overflow-x:auto;overflow-y:hidden}
+  .vbar-col{display:flex;flex-direction:column;align-items:center;gap:6px;min-width:42px}
+  .vbar{width:26px;background:#fc572c;border-radius:8px 8px 2px 2px}
+
+  .modal-backdrop{position:fixed;inset:0;background:#00000055;display:grid;place-items:center;z-index:1000}
+  .modal{width:min(680px,95vw);max-height:90vh;overflow:auto;background:#fff;border-radius:14px;padding:16px;border:1px solid #ffd9cc}
+  .modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:8px}
+
 </style>
