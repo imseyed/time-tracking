@@ -383,7 +383,7 @@
 
   @font-face {
     font-family: 'IRANSansX';
-    src: url('/fonts/IRANSansXFaNum-ExtraBold.woff') format('woff');
+    src: url('/fonts/IRANSansXFaNum-ExtraBold.woff2') format('woff2');
     font-weight: 800;
     font-style: normal;
   }
