@@ -111,10 +111,6 @@ try {
 
     $me = current_user($pdo);
 
-    if ($action === 'me' && $_SERVER['REQUEST_METHOD'] === 'GET') {
-        send(['user' => require_login($me)]);
-    }
-
     if ($action === 'users' && $_SERVER['REQUEST_METHOD'] === 'GET') {
         $auth = require_login($me);
         require_admin($auth);
@@ -125,28 +121,16 @@ try {
     if ($action === 'user-create' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $auth = require_login($me);
         require_admin($auth);
-
         $data = body();
-        $fullName = trim((string) ($data['full_name'] ?? ''));
-        $username = trim((string) ($data['username'] ?? ''));
-        $password = trim((string) ($data['password'] ?? ''));
-        $role = trim((string) ($data['role'] ?? 'user'));
-
-        if ($fullName === '' || $username === '' || $password === '') {
-            send(['error' => 'نام، نام کاربری و رمز عبور الزامی است.'], 422);
-        }
-        if (!in_array($role, ['admin', 'user'], true)) {
-            send(['error' => 'نقش نامعتبر است.'], 422);
-        }
 
         $stmt = $pdo->prepare(
             'INSERT INTO users (full_name, username, password, role) VALUES (:full_name, :username, :password, :role)'
         );
         $stmt->execute([
-            ':full_name' => $fullName,
-            ':username' => $username,
-            ':password' => password_hash($password, PASSWORD_BCRYPT),
-            ':role' => $role,
+            ':full_name' => trim((string) ($data['full_name'] ?? '')),
+            ':username' => trim((string) ($data['username'] ?? '')),
+            ':password' => password_hash(trim((string) ($data['password'] ?? '')), PASSWORD_BCRYPT),
+            ':role' => trim((string) ($data['role'] ?? 'user')),
         ]);
 
         send(['message' => 'کاربر جدید ایجاد شد.']);
@@ -155,25 +139,15 @@ try {
     if ($action === 'user-update' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $auth = require_login($me);
         require_admin($auth);
-
         $data = body();
+
         $id = (int) ($data['id'] ?? 0);
         $fullName = trim((string) ($data['full_name'] ?? ''));
         $role = trim((string) ($data['role'] ?? 'user'));
         $password = trim((string) ($data['password'] ?? ''));
 
-        if ($id <= 0 || $fullName === '') {
-            send(['error' => 'اطلاعات ویرایش کاربر ناقص است.'], 422);
-        }
-
-        if (!in_array($role, ['admin', 'user'], true)) {
-            send(['error' => 'نقش نامعتبر است.'], 422);
-        }
-
         if ($password !== '') {
-            $stmt = $pdo->prepare(
-                'UPDATE users SET full_name = :full_name, role = :role, password = :password WHERE id = :id'
-            );
+            $stmt = $pdo->prepare('UPDATE users SET full_name=:full_name, role=:role, password=:password WHERE id=:id');
             $stmt->execute([
                 ':id' => $id,
                 ':full_name' => $fullName,
@@ -181,7 +155,7 @@ try {
                 ':password' => password_hash($password, PASSWORD_BCRYPT),
             ]);
         } else {
-            $stmt = $pdo->prepare('UPDATE users SET full_name = :full_name, role = :role WHERE id = :id');
+            $stmt = $pdo->prepare('UPDATE users SET full_name=:full_name, role=:role WHERE id=:id');
             $stmt->execute([
                 ':id' => $id,
                 ':full_name' => $fullName,
@@ -190,6 +164,21 @@ try {
         }
 
         send(['message' => 'کاربر بروزرسانی شد.']);
+    }
+
+    if ($action === 'user-delete' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        $auth = require_login($me);
+        require_admin($auth);
+        $data = body();
+        $id = (int) ($data['id'] ?? 0);
+
+        if ($id === (int) $auth['id']) {
+            send(['error' => 'حذف ادمین جاری مجاز نیست.'], 422);
+        }
+
+        $pdo->prepare('DELETE FROM time_entries WHERE user_id = :id')->execute([':id' => $id]);
+        $pdo->prepare('DELETE FROM users WHERE id = :id')->execute([':id' => $id]);
+        send(['message' => 'کاربر حذف شد.']);
     }
 
     if ($action === 'projects' && $_SERVER['REQUEST_METHOD'] === 'GET') {
@@ -201,22 +190,34 @@ try {
     if ($action === 'project-create' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $auth = require_login($me);
         require_admin($auth);
-
         $data = body();
-        $name = trim((string) ($data['name'] ?? ''));
-        $color = trim((string) ($data['color'] ?? '#FC572C'));
-
-        if ($name === '') {
-            send(['error' => 'نام پروژه الزامی است.'], 422);
-        }
-
-        $stmt = $pdo->prepare('INSERT INTO projects (name, color) VALUES (:name, :color)');
-        $stmt->execute([
-            ':name' => $name,
-            ':color' => $color,
+        $pdo->prepare('INSERT INTO projects (name, color) VALUES (:name, :color)')->execute([
+            ':name' => trim((string) ($data['name'] ?? '')),
+            ':color' => trim((string) ($data['color'] ?? '#FC572C')),
         ]);
-
         send(['message' => 'پروژه جدید ایجاد شد.']);
+    }
+
+    if ($action === 'project-update' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        $auth = require_login($me);
+        require_admin($auth);
+        $data = body();
+        $pdo->prepare('UPDATE projects SET name=:name, color=:color WHERE id=:id')->execute([
+            ':id' => (int) ($data['id'] ?? 0),
+            ':name' => trim((string) ($data['name'] ?? '')),
+            ':color' => trim((string) ($data['color'] ?? '#FC572C')),
+        ]);
+        send(['message' => 'پروژه ویرایش شد.']);
+    }
+
+    if ($action === 'project-delete' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        $auth = require_login($me);
+        require_admin($auth);
+        $data = body();
+        $id = (int) ($data['id'] ?? 0);
+        $pdo->prepare('DELETE FROM time_entries WHERE project_id = :id')->execute([':id' => $id]);
+        $pdo->prepare('DELETE FROM projects WHERE id = :id')->execute([':id' => $id]);
+        send(['message' => 'پروژه حذف شد.']);
     }
 
     if ($action === 'entry-create' && $_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -224,40 +225,41 @@ try {
         $data = body();
 
         $requestedUserId = (int) ($data['user_id'] ?? 0);
-        $targetUserId = $auth['role'] === 'admin' && $requestedUserId > 0
-            ? $requestedUserId
-            : (int) $auth['id'];
+        $targetUserId = $auth['role'] === 'admin' && $requestedUserId > 0 ? $requestedUserId : (int) $auth['id'];
 
-        $projectId = (int) ($data['project_id'] ?? 0);
-        $workDate = trim((string) ($data['work_date'] ?? ''));
-        $startTime = trim((string) ($data['start_time'] ?? ''));
-        $endTime = trim((string) ($data['end_time'] ?? ''));
-        $description = trim((string) ($data['description'] ?? ''));
-
-        if ($targetUserId <= 0 || $projectId <= 0 || $workDate === '' || $startTime === '' || $endTime === '') {
-            send(['error' => 'تمام فیلدهای اجباری را تکمیل کنید.'], 422);
-        }
-
-        $duration = minutes_between($startTime, $endTime);
+        $duration = minutes_between(trim((string) ($data['start_time'] ?? '')), trim((string) ($data['end_time'] ?? '')));
         if ($duration <= 0) {
             send(['error' => 'زمان پایان باید بعد از زمان شروع باشد.'], 422);
         }
 
-        $stmt = $pdo->prepare(
+        $pdo->prepare(
             'INSERT INTO time_entries (user_id, project_id, work_date, start_time, end_time, description, duration_minutes)
              VALUES (:user_id, :project_id, :work_date, :start_time, :end_time, :description, :duration)'
-        );
-        $stmt->execute([
+        )->execute([
             ':user_id' => $targetUserId,
-            ':project_id' => $projectId,
-            ':work_date' => $workDate,
-            ':start_time' => $startTime,
-            ':end_time' => $endTime,
-            ':description' => $description,
+            ':project_id' => (int) ($data['project_id'] ?? 0),
+            ':work_date' => trim((string) ($data['work_date'] ?? '')),
+            ':start_time' => trim((string) ($data['start_time'] ?? '')),
+            ':end_time' => trim((string) ($data['end_time'] ?? '')),
+            ':description' => trim((string) ($data['description'] ?? '')),
             ':duration' => $duration,
         ]);
 
         send(['message' => 'ثبت ساعت با موفقیت انجام شد.']);
+    }
+
+    if ($action === 'entry-recent' && $_SERVER['REQUEST_METHOD'] === 'GET') {
+        $auth = require_login($me);
+        $stmt = $pdo->prepare(
+            'SELECT te.id, te.work_date, te.start_time, te.end_time, te.duration_minutes, te.description, p.name AS project_name
+             FROM time_entries te
+             INNER JOIN projects p ON p.id = te.project_id
+             WHERE te.user_id = :user_id
+             ORDER BY te.work_date DESC, te.start_time DESC
+             LIMIT 25'
+        );
+        $stmt->execute([':user_id' => (int) $auth['id']]);
+        send(['data' => $stmt->fetchAll()]);
     }
 
     if ($action === 'report' && $_SERVER['REQUEST_METHOD'] === 'GET') {
@@ -293,46 +295,26 @@ try {
 
         $sqlWhere = $where ? 'WHERE ' . implode(' AND ', $where) : '';
 
-        $detailSql = "
-            SELECT te.id, te.work_date, te.start_time, te.end_time, te.description, te.duration_minutes,
-                   u.full_name AS user_name,
-                   p.name AS project_name,
-                   p.color AS project_color
-            FROM time_entries te
-            INNER JOIN users u ON u.id = te.user_id
-            INNER JOIN projects p ON p.id = te.project_id
-            $sqlWhere
-            ORDER BY te.work_date DESC, te.start_time DESC
-        ";
+        $details = $pdo->prepare(
+            "SELECT te.id, te.work_date, te.start_time, te.end_time, te.description, te.duration_minutes,
+                    u.full_name AS user_name, p.name AS project_name, p.color AS project_color
+             FROM time_entries te
+             INNER JOIN users u ON u.id = te.user_id
+             INNER JOIN projects p ON p.id = te.project_id
+             $sqlWhere
+             ORDER BY te.work_date DESC, te.start_time DESC"
+        );
+        $details->execute($params);
+        $rows = $details->fetchAll();
 
-        $detailStmt = $pdo->prepare($detailSql);
-        $detailStmt->execute($params);
-        $details = $detailStmt->fetchAll();
-
-        $chartSql = "
-            SELECT p.name AS project_name,
-                   p.color AS project_color,
-                   SUM(te.duration_minutes) AS total_minutes
-            FROM time_entries te
-            INNER JOIN projects p ON p.id = te.project_id
-            $sqlWhere
-            GROUP BY te.project_id, p.name, p.color
-            ORDER BY total_minutes DESC
-        ";
-
-        $chartStmt = $pdo->prepare($chartSql);
-        $chartStmt->execute($params);
-        $chart = $chartStmt->fetchAll();
-
-        $totalMinutes = array_sum(array_map(static fn(array $row): int => (int) $row['duration_minutes'], $details));
+        $totalMinutes = array_sum(array_map(static fn(array $row): int => (int) $row['duration_minutes'], $rows));
 
         send([
-            'details' => $details,
-            'chart' => $chart,
+            'details' => $rows,
             'summary' => [
                 'total_minutes' => $totalMinutes,
                 'total_hours' => round($totalMinutes / 60, 2),
-                'entries_count' => count($details),
+                'entries_count' => count($rows),
             ],
         ]);
     }
