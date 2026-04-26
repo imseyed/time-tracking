@@ -265,6 +265,21 @@
 
   const toHours = (m) => (Number(m) / 60).toFixed(2)
   $: maxDaily = Math.max(1, ...dailyChart.map((d) => Number(d.total_minutes || 0)))
+  $: projectChart = Object.values(reportDetails.reduce((acc, row) => {
+    const key = String(row.project_id ?? row.project_name ?? '')
+    if (!key) return acc
+    if (!acc[key]) {
+      acc[key] = {
+        project_id: row.project_id ?? null,
+        project_name: row.project_name ?? 'بدون نام',
+        project_color: row.project_color || '#FC572C',
+        total_minutes: 0
+      }
+    }
+    acc[key].total_minutes += Number(row.duration_minutes || 0)
+    return acc
+  }, {})).sort((a, b) => Number(b.total_minutes) - Number(a.total_minutes))
+  $: maxProjectMinutes = Math.max(1, ...projectChart.map((p) => Number(p.total_minutes || 0)))
   $: userMenu = currentUser ? menuByRole[currentUser.role] ?? [] : []
   $: entrySubmitLabel = entryMode === 'edit' ? '💾 ذخیره ویرایش رکورد' : '💾 ثبت ساعت'
 
@@ -381,6 +396,8 @@
   }
 
   async function deleteEntry(row) {
+    const ok = confirm('آیا از حذف این رکورد مطمئن هستید؟')
+    if (!ok) return
     clearAlerts()
     try {
       await request('entry-delete', 'POST', { id: Number(row.id) })
@@ -720,6 +737,26 @@
             {/each}
           </div>
 
+          <h4>نمودار افقی ساعت به تفکیک پروژه</h4>
+          <div class="hchart">
+            {#if projectChart.length === 0}
+              <div class="hchart-empty">داده‌ای برای نمودار پروژه وجود ندارد.</div>
+            {:else}
+              {#each projectChart as p}
+                <div class="hbar-row" title={`${p.project_name} - ${toHours(p.total_minutes)}h`}>
+                  <div class="hbar-label">{p.project_name}</div>
+                  <div class="hbar-track">
+                    <div
+                      class="hbar-line"
+                      style={`background:${p.project_color};width:${Math.max(6, (Number(p.total_minutes) / maxProjectMinutes) * 100)}%`}
+                    ></div>
+                  </div>
+                  <div class="hbar-value">{toHours(p.total_minutes)} ساعت</div>
+                </div>
+              {/each}
+            {/if}
+          </div>
+
           <div class="table-wrap">
             <table>
               <thead><tr><th>تاریخ</th><th>کاربر</th><th>پروژه</th><th>شروع</th><th>پایان</th><th>دقیقه</th><th>شرح</th><th>عملیات</th></tr></thead>
@@ -782,7 +819,9 @@
   :global(body){margin:0;font-family:'IRANSansX',Tahoma,sans-serif;background:#fff7f3;color:#333;direction:rtl}
   .panel{display:grid;grid-template-columns:270px 1fr;min-height:100vh}
   .sidebar{background:linear-gradient(180deg,#fc572c,#d84a24);color:#fff;padding:16px;display:flex;flex-direction:column;gap:10px}
+  .sidebar nav{display:flex;flex-direction:column;gap:8px}
   .sidebar button{border:1px solid #ffffff4d;background:#ffffff24;color:#fff;padding:10px;border-radius:10px;text-align:right;cursor:pointer}
+  .sidebar nav button{width:100%;display:block}
   .sidebar button.active{background:#fff;color:#fc572c;font-weight:800}
   .logout{margin-top:auto}
   .content{padding:20px}
@@ -808,6 +847,13 @@
   .vchart{display:flex;gap:10px;align-items:flex-end;min-height:230px;max-width:100%;padding:10px;background:#fff4ef;border-radius:12px;overflow-x:auto;overflow-y:hidden}
   .vbar-col{display:flex;flex-direction:column;align-items:center;gap:6px;min-width:42px}
   .vbar{width:26px;background:#fc572c;border-radius:8px 8px 2px 2px}
+  .hchart{display:flex;flex-direction:column;gap:10px;background:#fff4ef;border-radius:12px;padding:12px;margin-top:10px;margin-bottom:12px}
+  .hchart-empty{color:#8a4a36}
+  .hbar-row{display:grid;grid-template-columns:minmax(130px,210px) 1fr minmax(80px,110px);gap:10px;align-items:center}
+  .hbar-label{font-size:.95rem;color:#663120}
+  .hbar-track{background:#ffe2d8;border-radius:999px;height:14px;overflow:hidden}
+  .hbar-line{height:100%;border-radius:999px;transition:width .2s ease}
+  .hbar-value{text-align:left;font-size:.9rem;color:#8d2c10}
 
   .modal-backdrop{position:fixed;inset:0;background:#00000055;display:grid;place-items:center;z-index:1000}
   .modal{width:min(680px,95vw);max-height:90vh;overflow:auto;background:#fff;border-radius:14px;padding:16px;border:1px solid #ffd9cc}
