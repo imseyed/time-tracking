@@ -45,91 +45,210 @@
     ]
   }
 
-  // Jalali conversion
-  function div(a, b) { return Math.floor(a / b) }
+  // Jalali conversion (based on jalaali-js algorithm)
+  function div(a, b) { return Math.trunc(a / b) }
+  function mod(a, b) { return a - div(a, b) * b }
+
   function g2d(gy, gm, gd) {
-    let d = div((gy + div(gm - 8, 6) + 100100) * 1461, 4) + div(153 * ((gm + 9) % 12) + 2, 5) + gd - 34840408
+    let d = div((gy + div(gm - 8, 6) + 100100) * 1461, 4) + div(153 * mod(gm + 9, 12) + 2, 5) + gd - 34840408
     d = d - div(div(gy + 100100 + div(gm - 8, 6), 100) * 3, 4) + 752
     return d
   }
+
   function d2g(jdn) {
     let j = 4 * jdn + 139361631
     j = j + div(div(4 * jdn + 183187720, 146097) * 3, 4) * 4 - 3908
-    const i = div((j % 1461), 4) * 5 + 308
-    const gd = div((i % 153), 5) + 1
-    const gm = (div(i, 153) % 12) + 1
+    const i = div(mod(j, 1461), 4) * 5 + 308
+    const gd = div(mod(i, 153), 5) + 1
+    const gm = mod(div(i, 153), 12) + 1
     const gy = div(j, 1461) - 100100 + div(8 - gm, 6)
     return { gy, gm, gd }
   }
+
   function jalCal(jy) {
     const breaks = [-61, 9, 38, 199, 426, 686, 756, 818, 1111, 1181, 1210, 1635, 2060, 2097, 2192, 2262, 2324, 2394, 2456, 3178]
     const bl = breaks.length
     const gy = jy + 621
     let leapJ = -14
     let jp = breaks[0]
-    let jm, jump, leap, n, i
+    let jm = 0
+    let jump = 0
+    let leap = 0
+    let n = 0
 
     if (jy < jp || jy >= breaks[bl - 1]) throw new Error('Invalid Jalali year')
 
-    for (i = 1; i < bl; i += 1) {
+    for (let i = 1; i < bl; i += 1) {
       jm = breaks[i]
       jump = jm - jp
       if (jy < jm) break
-      leapJ = leapJ + div(jump, 33) * 8 + div((jump % 33), 4)
+      leapJ = leapJ + div(jump, 33) * 8 + div(mod(jump, 33), 4)
       jp = jm
     }
+
     n = jy - jp
-    leapJ = leapJ + div(n, 33) * 8 + div(((n % 33) + 3), 4)
-    if ((jump % 33) === 4 && jump - n === 4) leapJ += 1
+    leapJ = leapJ + div(n, 33) * 8 + div(mod(n, 33) + 3, 4)
+    if (mod(jump, 33) === 4 && jump - n === 4) leapJ += 1
+
     const leapG = div(gy, 4) - div((div(gy, 100) + 1) * 3, 4) - 150
     const march = 20 + leapJ - leapG
+
     if (jump - n < 6) n = n - jump + div(jump + 4, 33) * 33
-    leap = ((((n + 1) % 33) - 1) % 4)
+    leap = mod(mod(n + 1, 33) - 1, 4)
     if (leap === -1) leap = 4
+
     return { leap, gy, march }
   }
+
   function j2d(jy, jm, jd) {
     const r = jalCal(jy)
     return g2d(r.gy, 3, r.march) + (jm - 1) * 31 - div(jm, 7) * (jm - 7) + jd - 1
   }
+
   function d2j(jdn) {
     const g = d2g(jdn)
     let jy = g.gy - 621
     const r = jalCal(jy)
     const jdn1f = g2d(g.gy, 3, r.march)
-    let jd, jm, k
-    k = jdn - jdn1f
+    let k = jdn - jdn1f
+
     if (k >= 0) {
-      if (k <= 185) {
-        jm = 1 + div(k, 31)
-        jd = (k % 31) + 1
-        return { jy, jm, jd }
-      }
+      if (k <= 185) return { jy, jm: 1 + div(k, 31), jd: mod(k, 31) + 1 }
       k -= 186
     } else {
       jy -= 1
       k += 179
       if (r.leap === 1) k += 1
     }
-    jm = 7 + div(k, 30)
-    jd = (k % 30) + 1
-    return { jy, jm, jd }
+
+    return { jy, jm: 7 + div(k, 30), jd: mod(k, 30) + 1 }
   }
 
   const pad = (n) => String(n).padStart(2, '0')
+  const jalaliMonthNames = ['فروردین', 'اردیبهشت', 'خرداد', 'تیر', 'مرداد', 'شهریور', 'مهر', 'آبان', 'آذر', 'دی', 'بهمن', 'اسفند']
+  const jalaliWeekDays = ['ش', 'ی', 'د', 'س', 'چ', 'پ', 'ج']
+
+  let calendarVisible = false
+  let calendarTarget = ''
+  let calendarView = { jy: 1405, jm: 1 }
+
+  function getTodayGregorianString() {
+    const today = new Date()
+    return `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`
+  }
+
+  function getJalaliMonthLength(jy, jm) {
+    if (jm >= 1 && jm <= 6) return 31
+    if (jm >= 7 && jm <= 11) return 30
+    if (jm === 12) return jalCal(jy).leap === 0 ? 30 : 29
+    return 0
+  }
+
+  function parseJalaliDate(dateStr) {
+    if (!dateStr) return null
+    const m = String(dateStr).trim().match(/^(\d{3,4})[/-](\d{1,2})[/-](\d{1,2})$/)
+    if (!m) return null
+    const jy = Number(m[1])
+    const jm = Number(m[2])
+    const jd = Number(m[3])
+    if (!Number.isInteger(jy) || !Number.isInteger(jm) || !Number.isInteger(jd)) return null
+    if (jm < 1 || jm > 12) return null
+    try {
+      const maxDay = getJalaliMonthLength(jy, jm)
+      if (jd < 1 || jd > maxDay) return null
+    } catch {
+      return null
+    }
+    return { jy, jm, jd }
+  }
+
   function gregorianToJalali(dateStr) {
     if (!dateStr) return ''
-    const [gy, gm, gd] = dateStr.split('-').map(Number)
-    const j = d2j(g2d(gy, gm, gd))
-    return `${j.jy}/${pad(j.jm)}/${pad(j.jd)}`
+    const m = String(dateStr).trim().match(/^(\d{4})-(\d{2})-(\d{2})$/)
+    if (!m) return ''
+    const gy = Number(m[1])
+    const gm = Number(m[2])
+    const gd = Number(m[3])
+    if (!gy || gm < 1 || gm > 12 || gd < 1 || gd > 31) return ''
+    try {
+      const j = d2j(g2d(gy, gm, gd))
+      return `${j.jy}/${pad(j.jm)}/${pad(j.jd)}`
+    } catch {
+      return ''
+    }
   }
+
   function jalaliToGregorian(dateStr) {
-    if (!dateStr) return ''
-    const parts = dateStr.split('/').map(Number)
-    if (parts.length !== 3 || parts.some(Number.isNaN)) return ''
-    const g = d2g(j2d(parts[0], parts[1], parts[2]))
-    return `${g.gy}-${pad(g.gm)}-${pad(g.gd)}`
+    const p = parseJalaliDate(dateStr)
+    if (!p) return ''
+    try {
+      const g = d2g(j2d(p.jy, p.jm, p.jd))
+      return `${g.gy}-${pad(g.gm)}-${pad(g.gd)}`
+    } catch {
+      return ''
+    }
   }
+
+  function getCalendarTargetValue() {
+    if (calendarTarget === 'entry') return form.work_date_jalali
+    if (calendarTarget === 'from') return reportFilter.from_date_jalali
+    if (calendarTarget === 'to') return reportFilter.to_date_jalali
+    return ''
+  }
+
+  function setCalendarTargetValue(value) {
+    if (calendarTarget === 'entry') form.work_date_jalali = value
+    if (calendarTarget === 'from') reportFilter.from_date_jalali = value
+    if (calendarTarget === 'to') reportFilter.to_date_jalali = value
+  }
+
+  function openJalaliCalendar(target) {
+    calendarTarget = target
+    const targetDate = parseJalaliDate(getCalendarTargetValue()) || parseJalaliDate(gregorianToJalali(getTodayGregorianString()))
+    if (targetDate) calendarView = { jy: targetDate.jy, jm: targetDate.jm }
+    calendarVisible = true
+  }
+
+  function closeJalaliCalendar() {
+    calendarVisible = false
+    calendarTarget = ''
+  }
+
+  function prevCalendarMonth() {
+    if (calendarView.jm === 1) calendarView = { jy: calendarView.jy - 1, jm: 12 }
+    else calendarView = { ...calendarView, jm: calendarView.jm - 1 }
+  }
+
+  function nextCalendarMonth() {
+    if (calendarView.jm === 12) calendarView = { jy: calendarView.jy + 1, jm: 1 }
+    else calendarView = { ...calendarView, jm: calendarView.jm + 1 }
+  }
+
+  function getCalendarDays(jy, jm) {
+    const daysInMonth = getJalaliMonthLength(jy, jm)
+    const g = d2g(j2d(jy, jm, 1))
+    const firstDay = new Date(g.gy, g.gm - 1, g.gd).getDay()
+    const offset = (firstDay + 1) % 7
+    const cells = Array(offset).fill(null)
+    for (let day = 1; day <= daysInMonth; day += 1) cells.push(day)
+    while (cells.length % 7 !== 0) cells.push(null)
+    return cells
+  }
+
+  function selectCalendarDay(day) {
+    if (!day) return
+    setCalendarTargetValue(`${calendarView.jy}/${pad(calendarView.jm)}/${pad(day)}`)
+    closeJalaliCalendar()
+  }
+
+  function isSelectedCalendarDay(day) {
+    if (!day) return false
+    const p = parseJalaliDate(getCalendarTargetValue())
+    if (!p) return false
+    return p.jy === calendarView.jy && p.jm === calendarView.jm && p.jd === day
+  }
+
+  $: calendarDays = getCalendarDays(calendarView.jy, calendarView.jm)
 
   function setDefaultReportRange() {
     const today = new Date()
@@ -235,11 +354,11 @@
         project_id: Number(form.project_id)
       }
       await request('entry-create', 'POST', payload)
-      message = '✅ ساعت کاری با موفقیت ثبت شد.'
       form.start_time = ''
       form.end_time = ''
       form.description = ''
       await loadRecentEntries()
+      message = '✅ ساعت کاری با موفقیت ثبت شد.'
     } catch (e) {
       error = e.message
     }
@@ -368,7 +487,12 @@
               </select>
             </label>
             <label>📅 تاریخ شمسی (yyyy/mm/dd)
-              <input bind:value={form.work_date_jalali} placeholder="1405/01/31" />
+              <input
+                bind:value={form.work_date_jalali}
+                placeholder="1405/01/31"
+                on:focus={() => openJalaliCalendar('entry')}
+                on:click={() => openJalaliCalendar('entry')}
+              />
             </label>
             <label>🕒 شروع <input type="time" bind:value={form.start_time} /></label>
             <label>🕕 پایان <input type="time" bind:value={form.end_time} /></label>
@@ -488,8 +612,22 @@
             <label>📁 پروژه
               <select bind:value={reportFilter.project_id}><option value="">همه</option>{#each projects as p}<option value={p.id}>{p.name}</option>{/each}</select>
             </label>
-            <label>📅 از تاریخ شمسی <input bind:value={reportFilter.from_date_jalali} placeholder="1405/01/01" /></label>
-            <label>📅 تا تاریخ شمسی <input bind:value={reportFilter.to_date_jalali} placeholder="1405/01/30" /></label>
+            <label>📅 از تاریخ شمسی
+              <input
+                bind:value={reportFilter.from_date_jalali}
+                placeholder="1405/01/01"
+                on:focus={() => openJalaliCalendar('from')}
+                on:click={() => openJalaliCalendar('from')}
+              />
+            </label>
+            <label>📅 تا تاریخ شمسی
+              <input
+                bind:value={reportFilter.to_date_jalali}
+                placeholder="1405/01/30"
+                on:focus={() => openJalaliCalendar('to')}
+                on:click={() => openJalaliCalendar('to')}
+              />
+            </label>
           </div>
           <button class="primary" on:click={loadReport}>🔎 اعمال فیلتر</button>
 
@@ -523,11 +661,39 @@
       {/if}
     </section>
   </main>
+
+  {#if calendarVisible}
+    <div class="calendar-backdrop" on:click={closeJalaliCalendar}>
+      <div class="calendar-popup" on:click|stopPropagation>
+        <div class="calendar-head">
+          <button type="button" on:click={nextCalendarMonth}>‹</button>
+          <strong>{jalaliMonthNames[calendarView.jm - 1]} {calendarView.jy}</strong>
+          <button type="button" on:click={prevCalendarMonth}>›</button>
+        </div>
+        <div class="calendar-grid weekdays">
+          {#each jalaliWeekDays as wd}<span>{wd}</span>{/each}
+        </div>
+        <div class="calendar-grid days">
+          {#each calendarDays as d}
+            <button
+              type="button"
+              class:empty={!d}
+              class:selected={isSelectedCalendarDay(d)}
+              disabled={!d}
+              on:click={() => selectCalendarDay(d)}
+            >
+              {d ?? ''}
+            </button>
+          {/each}
+        </div>
+      </div>
+    </div>
+  {/if}
 {/if}
 
 <style>
   @font-face { font-family: 'IRANSansX'; src: url('/fonts/IRANSansXFaNum-Medium.woff2') format('woff2'); font-weight: 500; }
-  @font-face { font-family: 'IRANSansX'; src: url('/fonts/IRANSansXFaNum-ExtraBold.woff') format('woff'); font-weight: 800; }
+  @font-face { font-family: 'IRANSansX'; src: url('/fonts/IRANSansXFaNum-ExtraBold.woff2') format('woff2'); font-weight: 800; }
   :global(body){margin:0;font-family:'IRANSansX',Tahoma,sans-serif;background:#fff7f3;color:#333;direction:rtl}
   .panel{display:grid;grid-template-columns:270px 1fr;min-height:100vh}
   .sidebar{background:linear-gradient(180deg,#fc572c,#d84a24);color:#fff;padding:16px;display:flex;flex-direction:column;gap:10px}
@@ -558,5 +724,16 @@
   .modal-backdrop{position:fixed;inset:0;background:#00000055;display:grid;place-items:center;z-index:1000}
   .modal{width:min(680px,95vw);max-height:90vh;overflow:auto;background:#fff;border-radius:14px;padding:16px;border:1px solid #ffd9cc}
   .modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:8px}
+
+  .calendar-backdrop{position:fixed;inset:0;background:#0000003d;display:grid;place-items:center;z-index:1200}
+  .calendar-popup{background:#fff;border:1px solid #ffd9cc;border-radius:14px;padding:12px;width:min(320px,92vw);box-shadow:0 14px 30px #00000020}
+  .calendar-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+  .calendar-head button{width:36px;height:36px;padding:0;border-radius:10px;background:#fff4ef;color:#a33f20;border:1px solid #ffc7b6;cursor:pointer}
+  .calendar-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+  .calendar-grid.weekdays span{display:grid;place-items:center;font-size:.85rem;color:#8a4a36}
+  .calendar-grid.days button{height:34px;border:1px solid #ffd8cb;background:#fff;border-radius:8px;cursor:pointer}
+  .calendar-grid.days button.selected{background:#fc572c;color:#fff;border-color:#fc572c}
+  .calendar-grid.days button.empty{visibility:hidden}
+  .calendar-grid.days button:disabled{cursor:default}
 
 </style>
