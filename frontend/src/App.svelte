@@ -31,8 +31,14 @@
   let error = ''
   let userAction = 'none'
   let projectAction = 'list'
-  let entryMode = 'create'
-  let editingEntryId = 0
+  let entryEditOpen = false
+  let entryEditForm = { id: 0, user_id: 0, project_id: 0, work_date_jalali: '', start_time: '', end_time: '', description: '' }
+  let isLoggingIn = false
+  let isSubmittingEntry = false
+  let isSavingEntryEdit = false
+  let isSavingUser = false
+  let isSavingProject = false
+  let isLoadingReport = false
 
   const menuByRole = {
     admin: [
@@ -193,6 +199,7 @@
 
   function getCalendarTargetValue() {
     if (calendarTarget === 'entry') return form.work_date_jalali
+    if (calendarTarget === 'edit') return entryEditForm.work_date_jalali
     if (calendarTarget === 'from') return reportFilter.from_date_jalali
     if (calendarTarget === 'to') return reportFilter.to_date_jalali
     return ''
@@ -200,6 +207,7 @@
 
   function setCalendarTargetValue(value) {
     if (calendarTarget === 'entry') form.work_date_jalali = value
+    if (calendarTarget === 'edit') entryEditForm.work_date_jalali = value
     if (calendarTarget === 'from') reportFilter.from_date_jalali = value
     if (calendarTarget === 'to') reportFilter.to_date_jalali = value
   }
@@ -281,7 +289,6 @@
   }, {})).sort((a, b) => Number(b.total_minutes) - Number(a.total_minutes))
   $: maxProjectMinutes = Math.max(1, ...projectChart.map((p) => Number(p.total_minutes || 0)))
   $: userMenu = currentUser ? menuByRole[currentUser.role] ?? [] : []
-  $: entrySubmitLabel = entryMode === 'edit' ? '💾 ذخیره ویرایش رکورد' : '💾 ثبت ساعت'
 
   function clearAlerts() { error = '' }
 
@@ -300,6 +307,8 @@
   }
 
   async function doLogin() {
+    if (isLoggingIn) return
+    isLoggingIn = true
     clearAlerts()
     try {
       const json = await request('login', 'POST', loginForm)
@@ -310,6 +319,8 @@
       message = `خوش آمدید ${currentUser.full_name}`
     } catch (e) {
       error = e.message
+    } finally {
+      isLoggingIn = false
     }
   }
 
@@ -324,6 +335,9 @@
     if (currentUser?.role !== 'admin') return
     const json = await request('users')
     users = json.data || []
+    if (!form.user_id || !users.some((u) => Number(u.id) === Number(form.user_id))) {
+      form.user_id = String(currentUser.id)
+    }
   }
 
   async function loadProjects() {
@@ -351,6 +365,8 @@
   }
 
   async function loadReport() {
+    if (isLoadingReport) return
+    isLoadingReport = true
     clearAlerts()
     try {
       const qs = new URLSearchParams({ action: 'report', auth_user_id: String(currentUser.id) })
@@ -370,29 +386,71 @@
       summary = json.summary || summary
     } catch (e) {
       error = e.message
+    } finally {
+      isLoadingReport = false
     }
   }
 
-  function startEditEntry(row, jumpToEntryView = false) {
-    entryMode = 'edit'
-    editingEntryId = Number(row.id)
-    form.user_id = String(row.user_id ?? form.user_id ?? currentUser.id)
-    form.project_id = String(row.project_id)
-    form.work_date_jalali = row.work_date_j || gregorianToJalali(row.work_date)
-    form.start_time = row.start_time || ''
-    form.end_time = row.end_time || ''
-    form.description = row.description || ''
-    if (jumpToEntryView) view = 'entry'
-    refreshRecentEntries()
-    message = 'در حال ویرایش رکورد انتخاب‌شده هستید.'
+  function resolveUserIdForEdit(row) {
+    const idFromRow = Number(row.user_id || 0)
+    if (idFromRow > 0) return idFromRow
+    const byName = users.find((u) => u.full_name === row.user_name)
+    if (byName) return Number(byName.id)
+    return Number(currentUser?.id || 0)
   }
 
-  function cancelEditEntry() {
-    entryMode = 'create'
-    editingEntryId = 0
-    form.start_time = ''
-    form.end_time = ''
-    form.description = ''
+  function resolveProjectIdForEdit(row) {
+    const idFromRow = Number(row.project_id || 0)
+    if (idFromRow > 0) return idFromRow
+    const byName = projects.find((p) => p.name === row.project_name)
+    if (byName) return Number(byName.id)
+    return Number(projects[0]?.id || 0)
+  }
+
+  function openEntryEditDialog(row) {
+    entryEditForm = {
+      id: Number(row.id || 0),
+      user_id: Number(resolveUserIdForEdit(row)),
+      project_id: Number(resolveProjectIdForEdit(row)),
+      work_date_jalali: row.work_date_j || gregorianToJalali(row.work_date),
+      start_time: row.start_time || '',
+      end_time: row.end_time || '',
+      description: row.description || ''
+    }
+    entryEditOpen = true
+  }
+
+  function closeEntryEditDialog() {
+    entryEditOpen = false
+    entryEditForm = { id: 0, user_id: 0, project_id: 0, work_date_jalali: '', start_time: '', end_time: '', description: '' }
+  }
+
+  async function submitEntryEdit() {
+    if (isSavingEntryEdit) return
+    isSavingEntryEdit = true
+    clearAlerts()
+    try {
+      const workDate = jalaliToGregorian(entryEditForm.work_date_jalali)
+      if (!workDate) throw new Error('تاریخ شمسی معتبر نیست. مثال: 1405/01/31')
+      const payload = {
+        id: Number(entryEditForm.id),
+        user_id: Number(entryEditForm.user_id || 0),
+        project_id: Number(entryEditForm.project_id || 0),
+        work_date: workDate,
+        start_time: entryEditForm.start_time,
+        end_time: entryEditForm.end_time,
+        description: entryEditForm.description || ''
+      }
+      await request('entry-update', 'POST', payload)
+      closeEntryEditDialog()
+      await loadRecentEntries()
+      await loadReport()
+      message = '✅ رکورد ساعت کاری ویرایش شد.'
+    } catch (e) {
+      error = e.message
+    } finally {
+      isSavingEntryEdit = false
+    }
   }
 
   async function deleteEntry(row) {
@@ -401,7 +459,6 @@
     clearAlerts()
     try {
       await request('entry-delete', 'POST', { id: Number(row.id) })
-      if (editingEntryId === Number(row.id)) cancelEditEntry()
       await loadRecentEntries()
       await loadReport()
       message = '✅ رکورد ساعت کاری حذف شد.'
@@ -411,31 +468,29 @@
   }
 
   async function submitEntry() {
+    if (isSubmittingEntry) return
+    isSubmittingEntry = true
     clearAlerts()
     try {
-      const wasEditing = entryMode === 'edit'
       const workDate = jalaliToGregorian(form.work_date_jalali)
       if (!workDate) throw new Error('تاریخ شمسی معتبر نیست. مثال: 1405/01/31')
       const payload = {
         ...form,
-        id: editingEntryId,
         work_date: workDate,
         user_id: Number(form.user_id),
         project_id: Number(form.project_id)
       }
-      const action = wasEditing ? 'entry-update' : 'entry-create'
-      await request(action, 'POST', payload)
-      if (wasEditing) cancelEditEntry()
-      else {
-        form.start_time = ''
-        form.end_time = ''
-        form.description = ''
-      }
+      await request('entry-create', 'POST', payload)
+      form.start_time = ''
+      form.end_time = ''
+      form.description = ''
       await loadRecentEntries()
       await loadReport()
-      message = wasEditing ? '✅ رکورد ساعت کاری ویرایش شد.' : '✅ ساعت کاری با موفقیت ثبت شد.'
+      message = '✅ ساعت کاری با موفقیت ثبت شد.'
     } catch (e) {
       error = e.message
+    } finally {
+      isSubmittingEntry = false
     }
   }
 
@@ -445,6 +500,8 @@
   }
 
   async function saveUser() {
+    if (isSavingUser) return
+    isSavingUser = true
     clearAlerts()
     try {
       if (userAction === 'create') {
@@ -457,7 +514,7 @@
       userAction = 'none'
       userForm = { id: '', full_name: '', username: '', password: '', role: 'user' }
       await loadUsers()
-    } catch (e) { error = e.message }
+    } catch (e) { error = e.message } finally { isSavingUser = false }
   }
 
   async function deleteUser(id) {
@@ -475,6 +532,8 @@
   }
 
   async function saveProject() {
+    if (isSavingProject) return
+    isSavingProject = true
     clearAlerts()
     try {
       if (projectAction === 'create') {
@@ -487,7 +546,7 @@
       projectAction = 'list'
       projectForm = { id: '', name: '', color: '#FC572C' }
       await loadProjects()
-    } catch (e) { error = e.message }
+    } catch (e) { error = e.message } finally { isSavingProject = false }
   }
 
   async function deleteProject(id) {
@@ -523,9 +582,11 @@
       <h1>⏱️ ورود به سامانه</h1>
       <p>اکانت پیش‌فرض: <strong>admin / public</strong></p>
       {#if error}<div class="alert error">{error}</div>{/if}
-      <label>👤 نام کاربری <input bind:value={loginForm.username} /></label>
-      <label>🔐 رمز عبور <input type="password" bind:value={loginForm.password} /></label>
-      <button class="primary" on:click={doLogin}>🔓 ورود</button>
+      <form on:submit|preventDefault={doLogin}>
+        <label>👤 نام کاربری <input bind:value={loginForm.username} /></label>
+        <label>🔐 رمز عبور <input type="password" bind:value={loginForm.password} /></label>
+        <button class="primary" type="submit" disabled={isLoggingIn}>🔓 ورود</button>
+      </form>
     </section>
   </main>
 {:else}
@@ -548,37 +609,34 @@
       {#if view === 'entry'}
         <div class="card">
           <h3>⏱️ ثبت ساعت کاری</h3>
-          <div class="grid">
-            {#if currentUser.role === 'admin'}
-              <label>👤 کاربر
-                <select bind:value={form.user_id} on:change={refreshRecentEntries}>
-                  {#each users as u}<option value={u.id}>{u.full_name}</option>{/each}
+          <form on:submit|preventDefault={submitEntry}>
+            <div class="grid">
+              {#if currentUser.role === 'admin'}
+                <label>👤 کاربر
+                  <select bind:value={form.user_id} on:change={refreshRecentEntries}>
+                    {#each users as u}<option value={u.id}>{u.full_name}</option>{/each}
+                  </select>
+                </label>
+              {/if}
+              <label>📁 پروژه
+                <select bind:value={form.project_id}>
+                  {#each projects as p}<option value={p.id}>{p.name}</option>{/each}
                 </select>
               </label>
-            {/if}
-            <label>📁 پروژه
-              <select bind:value={form.project_id}>
-                {#each projects as p}<option value={p.id}>{p.name}</option>{/each}
-              </select>
-            </label>
-            <label>📅 تاریخ شمسی (yyyy/mm/dd)
-              <input
-                bind:value={form.work_date_jalali}
-                placeholder="1405/01/31"
-                on:focus={() => openJalaliCalendar('entry')}
-                on:click={() => openJalaliCalendar('entry')}
-              />
-            </label>
-            <label>🕒 شروع <input type="time" bind:value={form.start_time} /></label>
-            <label>🕕 پایان <input type="time" bind:value={form.end_time} /></label>
-          </div>
-          <label>📝 شرح کار <textarea rows="3" bind:value={form.description} /></label>
-          <div class="actions">
-            <button class="primary" on:click={submitEntry}>{entrySubmitLabel}</button>
-            {#if entryMode === 'edit'}
-              <button on:click={cancelEditEntry}>لغو ویرایش</button>
-            {/if}
-          </div>
+              <label>📅 تاریخ شمسی (yyyy/mm/dd)
+                <input
+                  bind:value={form.work_date_jalali}
+                  placeholder="1405/01/31"
+                  on:focus={() => openJalaliCalendar('entry')}
+                  on:click={() => openJalaliCalendar('entry')}
+                />
+              </label>
+              <label>🕒 شروع <input type="time" bind:value={form.start_time} /></label>
+              <label>🕕 پایان <input type="time" bind:value={form.end_time} /></label>
+            </div>
+            <label>📝 شرح کار <textarea rows="3" bind:value={form.description} /></label>
+            <button class="primary" type="submit" disabled={isSubmittingEntry}>💾 ثبت ساعت</button>
+          </form>
 
           <h4>25 رکورد اخیر</h4>
           <div class="table-wrap">
@@ -601,7 +659,7 @@
                       <td>{row.project_name}</td><td>{row.start_time}</td><td>{row.end_time}</td><td>{row.duration_minutes}</td><td>{row.description}</td>
                       <td>
                         <div class="row-actions">
-                          <button on:click={() => startEditEntry(row)}>✏️ ویرایش</button>
+                          <button on:click={() => openEntryEditDialog(row)}>✏️ ویرایش</button>
                           <button class="danger" on:click={() => deleteEntry(row)}>🗑️ حذف</button>
                         </div>
                       </td>
@@ -641,18 +699,20 @@
             <div class="modal-backdrop" on:click={() => (userAction = 'none')}>
               <div class="modal" on:click|stopPropagation>
                 <h4>{userAction === 'create' ? 'ایجاد کاربر' : 'ویرایش کاربر'}</h4>
-                <div class="grid">
-                  <label>نام <input bind:value={userForm.full_name} /></label>
-                  <label>نام کاربری <input bind:value={userForm.username} disabled={userAction==='edit'} /></label>
-                  <label>رمز عبور <input type="password" bind:value={userForm.password} placeholder={userAction==='edit' ? 'خالی = بدون تغییر' : ''} /></label>
-                  <label>نقش
-                    <select bind:value={userForm.role}><option value="user">user</option><option value="admin">admin</option></select>
-                  </label>
-                </div>
-                <div class="modal-actions">
-                  <button class="primary" on:click={saveUser}>💾 ذخیره کاربر</button>
-                  <button on:click={() => (userAction = 'none')}>لغو</button>
-                </div>
+                <form on:submit|preventDefault={saveUser}>
+                  <div class="grid">
+                    <label>نام <input bind:value={userForm.full_name} /></label>
+                    <label>نام کاربری <input bind:value={userForm.username} disabled={userAction==='edit'} /></label>
+                    <label>رمز عبور <input type="password" bind:value={userForm.password} placeholder={userAction==='edit' ? 'خالی = بدون تغییر' : ''} /></label>
+                    <label>نقش
+                      <select bind:value={userForm.role}><option value="user">user</option><option value="admin">admin</option></select>
+                    </label>
+                  </div>
+                  <div class="modal-actions">
+                    <button class="primary" type="submit" disabled={isSavingUser}>💾 ذخیره کاربر</button>
+                    <button type="button" on:click={() => (userAction = 'none')}>لغو</button>
+                  </div>
+                </form>
               </div>
             </div>
           {/if}
@@ -682,11 +742,13 @@
           </div>
 
           {#if projectAction !== 'list'}
-            <div class="grid">
-              <label>نام پروژه <input bind:value={projectForm.name} /></label>
-              <label>رنگ <input type="color" bind:value={projectForm.color} /></label>
-            </div>
-            <button class="primary" on:click={saveProject}>💾 ذخیره پروژه</button>
+            <form on:submit|preventDefault={saveProject}>
+              <div class="grid">
+                <label>نام پروژه <input bind:value={projectForm.name} /></label>
+                <label>رنگ <input type="color" bind:value={projectForm.color} /></label>
+              </div>
+              <button class="primary" type="submit" disabled={isSavingProject}>💾 ذخیره پروژه</button>
+            </form>
           {/if}
         </div>
       {/if}
@@ -694,36 +756,38 @@
       {#if view === 'report'}
         <div class="card">
           <h3>📊 گزارش‌گیری</h3>
-          <div class="grid">
-            {#if currentUser.role === 'admin'}
-              <label>👤 کاربر
-                <select bind:value={reportFilter.user_id}>
-                  <option value="">همه</option>
-                  {#each users as u}<option value={u.id}>{u.full_name}</option>{/each}
-                </select>
+          <form on:submit|preventDefault={loadReport}>
+            <div class="grid">
+              {#if currentUser.role === 'admin'}
+                <label>👤 کاربر
+                  <select bind:value={reportFilter.user_id}>
+                    <option value="">همه</option>
+                    {#each users as u}<option value={u.id}>{u.full_name}</option>{/each}
+                  </select>
+                </label>
+              {/if}
+              <label>📁 پروژه
+                <select bind:value={reportFilter.project_id}><option value="">همه</option>{#each projects as p}<option value={p.id}>{p.name}</option>{/each}</select>
               </label>
-            {/if}
-            <label>📁 پروژه
-              <select bind:value={reportFilter.project_id}><option value="">همه</option>{#each projects as p}<option value={p.id}>{p.name}</option>{/each}</select>
-            </label>
-            <label>📅 از تاریخ شمسی
-              <input
-                bind:value={reportFilter.from_date_jalali}
-                placeholder="1405/01/01"
-                on:focus={() => openJalaliCalendar('from')}
-                on:click={() => openJalaliCalendar('from')}
-              />
-            </label>
-            <label>📅 تا تاریخ شمسی
-              <input
-                bind:value={reportFilter.to_date_jalali}
-                placeholder="1405/01/30"
-                on:focus={() => openJalaliCalendar('to')}
-                on:click={() => openJalaliCalendar('to')}
-              />
-            </label>
-          </div>
-          <button class="primary" on:click={loadReport}>🔎 اعمال فیلتر</button>
+              <label>📅 از تاریخ شمسی
+                <input
+                  bind:value={reportFilter.from_date_jalali}
+                  placeholder="1405/01/01"
+                  on:focus={() => openJalaliCalendar('from')}
+                  on:click={() => openJalaliCalendar('from')}
+                />
+              </label>
+              <label>📅 تا تاریخ شمسی
+                <input
+                  bind:value={reportFilter.to_date_jalali}
+                  placeholder="1405/01/30"
+                  on:focus={() => openJalaliCalendar('to')}
+                  on:click={() => openJalaliCalendar('to')}
+                />
+              </label>
+            </div>
+            <button class="primary" type="submit" disabled={isLoadingReport}>🔎 اعمال فیلتر</button>
+          </form>
 
           <div class="summary"><span>تعداد: {summary.entries_count}</span><span>کل ساعت: {summary.total_hours}</span></div>
 
@@ -769,7 +833,7 @@
                       <td>{row.work_date_j}</td><td>{row.user_name}</td><td>{row.project_name}</td><td>{row.start_time}</td><td>{row.end_time}</td><td>{row.duration_minutes}</td><td>{row.description}</td>
                       <td>
                         <div class="row-actions">
-                          <button on:click={() => startEditEntry(row, true)}>✏️ ویرایش</button>
+                          <button on:click={() => openEntryEditDialog(row)}>✏️ ویرایش</button>
                           <button class="danger" on:click={() => deleteEntry(row)}>🗑️ حذف</button>
                         </div>
                       </td>
@@ -783,6 +847,45 @@
       {/if}
     </section>
   </main>
+
+  {#if entryEditOpen}
+    <div class="modal-backdrop" on:click={closeEntryEditDialog}>
+      <div class="modal" on:click|stopPropagation>
+        <h4>ویرایش رکورد ساعت کاری</h4>
+        <form on:submit|preventDefault={submitEntryEdit}>
+          <div class="grid">
+            {#if currentUser.role === 'admin'}
+              <label>👤 کاربر
+                <select bind:value={entryEditForm.user_id}>
+                  {#each users as u}<option value={u.id}>{u.full_name}</option>{/each}
+                </select>
+              </label>
+            {/if}
+            <label>📁 پروژه
+              <select bind:value={entryEditForm.project_id}>
+                {#each projects as p}<option value={p.id}>{p.name}</option>{/each}
+              </select>
+            </label>
+            <label>📅 تاریخ شمسی (yyyy/mm/dd)
+              <input
+                bind:value={entryEditForm.work_date_jalali}
+                placeholder="1405/01/31"
+                on:focus={() => openJalaliCalendar('edit')}
+                on:click={() => openJalaliCalendar('edit')}
+              />
+            </label>
+            <label>🕒 شروع <input type="time" bind:value={entryEditForm.start_time} /></label>
+            <label>🕕 پایان <input type="time" bind:value={entryEditForm.end_time} /></label>
+          </div>
+          <label>📝 شرح کار <textarea rows="3" bind:value={entryEditForm.description} /></label>
+          <div class="modal-actions">
+            <button class="primary" type="submit" disabled={isSavingEntryEdit}>💾 ذخیره ویرایش</button>
+            <button type="button" on:click={closeEntryEditDialog}>لغو</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  {/if}
 
   {#if calendarVisible}
     <div class="calendar-backdrop" on:click={closeJalaliCalendar}>
