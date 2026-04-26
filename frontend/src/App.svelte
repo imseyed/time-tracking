@@ -31,6 +31,8 @@
   let error = ''
   let userAction = 'none'
   let projectAction = 'list'
+  let entryMode = 'create'
+  let editingEntryId = 0
 
   const menuByRole = {
     admin: [
@@ -264,6 +266,7 @@
   const toHours = (m) => (Number(m) / 60).toFixed(2)
   $: maxDaily = Math.max(1, ...dailyChart.map((d) => Number(d.total_minutes || 0)))
   $: userMenu = currentUser ? menuByRole[currentUser.role] ?? [] : []
+  $: entrySubmitLabel = entryMode === 'edit' ? '💾 ذخیره ویرایش رکورد' : '💾 ثبت ساعت'
 
   function clearAlerts() { error = '' }
 
@@ -315,8 +318,21 @@
   }
 
   async function loadRecentEntries() {
-    const json = await request('entries-recent')
+    const qs = new URLSearchParams({ action: 'entries-recent', auth_user_id: String(currentUser.id) })
+    if (currentUser.role === 'admin' && form.user_id) qs.set('user_id', form.user_id)
+    const res = await fetch(`${API_BASE}?${qs.toString()}`)
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || 'لیست رکوردها دریافت نشد.')
     recentEntries = (json.data || []).map((r) => ({ ...r, work_date_j: gregorianToJalali(r.work_date) }))
+  }
+
+  async function refreshRecentEntries() {
+    clearAlerts()
+    try {
+      await loadRecentEntries()
+    } catch (e) {
+      error = e.message
+    }
   }
 
   async function loadReport() {
@@ -342,23 +358,65 @@
     }
   }
 
+  function startEditEntry(row, jumpToEntryView = false) {
+    entryMode = 'edit'
+    editingEntryId = Number(row.id)
+    form.user_id = String(row.user_id ?? form.user_id ?? currentUser.id)
+    form.project_id = String(row.project_id)
+    form.work_date_jalali = row.work_date_j || gregorianToJalali(row.work_date)
+    form.start_time = row.start_time || ''
+    form.end_time = row.end_time || ''
+    form.description = row.description || ''
+    if (jumpToEntryView) view = 'entry'
+    refreshRecentEntries()
+    message = 'در حال ویرایش رکورد انتخاب‌شده هستید.'
+  }
+
+  function cancelEditEntry() {
+    entryMode = 'create'
+    editingEntryId = 0
+    form.start_time = ''
+    form.end_time = ''
+    form.description = ''
+  }
+
+  async function deleteEntry(row) {
+    clearAlerts()
+    try {
+      await request('entry-delete', 'POST', { id: Number(row.id) })
+      if (editingEntryId === Number(row.id)) cancelEditEntry()
+      await loadRecentEntries()
+      await loadReport()
+      message = '✅ رکورد ساعت کاری حذف شد.'
+    } catch (e) {
+      error = e.message
+    }
+  }
+
   async function submitEntry() {
     clearAlerts()
     try {
+      const wasEditing = entryMode === 'edit'
       const workDate = jalaliToGregorian(form.work_date_jalali)
       if (!workDate) throw new Error('تاریخ شمسی معتبر نیست. مثال: 1405/01/31')
       const payload = {
         ...form,
+        id: editingEntryId,
         work_date: workDate,
         user_id: Number(form.user_id),
         project_id: Number(form.project_id)
       }
-      await request('entry-create', 'POST', payload)
-      form.start_time = ''
-      form.end_time = ''
-      form.description = ''
+      const action = wasEditing ? 'entry-update' : 'entry-create'
+      await request(action, 'POST', payload)
+      if (wasEditing) cancelEditEntry()
+      else {
+        form.start_time = ''
+        form.end_time = ''
+        form.description = ''
+      }
       await loadRecentEntries()
-      message = '✅ ساعت کاری با موفقیت ثبت شد.'
+      await loadReport()
+      message = wasEditing ? '✅ رکورد ساعت کاری ویرایش شد.' : '✅ ساعت کاری با موفقیت ثبت شد.'
     } catch (e) {
       error = e.message
     }
@@ -476,7 +534,7 @@
           <div class="grid">
             {#if currentUser.role === 'admin'}
               <label>👤 کاربر
-                <select bind:value={form.user_id}>
+                <select bind:value={form.user_id} on:change={refreshRecentEntries}>
                   {#each users as u}<option value={u.id}>{u.full_name}</option>{/each}
                 </select>
               </label>
@@ -498,19 +556,38 @@
             <label>🕕 پایان <input type="time" bind:value={form.end_time} /></label>
           </div>
           <label>📝 شرح کار <textarea rows="3" bind:value={form.description} /></label>
-          <button class="primary" on:click={submitEntry}>💾 ثبت ساعت</button>
+          <div class="actions">
+            <button class="primary" on:click={submitEntry}>{entrySubmitLabel}</button>
+            {#if entryMode === 'edit'}
+              <button on:click={cancelEditEntry}>لغو ویرایش</button>
+            {/if}
+          </div>
 
-          <h4>25 رکورد اخیر شما</h4>
+          <h4>25 رکورد اخیر</h4>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>تاریخ</th><th>پروژه</th><th>شروع</th><th>پایان</th><th>دقیقه</th><th>شرح</th></tr></thead>
+              <thead>
+                <tr>
+                  <th>تاریخ</th>
+                  {#if currentUser.role === 'admin'}<th>کاربر</th>{/if}
+                  <th>پروژه</th><th>شروع</th><th>پایان</th><th>دقیقه</th><th>شرح</th><th>عملیات</th>
+                </tr>
+              </thead>
               <tbody>
                 {#if recentEntries.length === 0}
-                  <tr><td colspan="6">رکوردی ثبت نشده است.</td></tr>
+                  <tr><td colspan={currentUser.role === 'admin' ? 8 : 7}>رکوردی ثبت نشده است.</td></tr>
                 {:else}
                   {#each recentEntries as row}
                     <tr>
-                      <td>{row.work_date_j}</td><td>{row.project_name}</td><td>{row.start_time}</td><td>{row.end_time}</td><td>{row.duration_minutes}</td><td>{row.description}</td>
+                      <td>{row.work_date_j}</td>
+                      {#if currentUser.role === 'admin'}<td>{row.user_name}</td>{/if}
+                      <td>{row.project_name}</td><td>{row.start_time}</td><td>{row.end_time}</td><td>{row.duration_minutes}</td><td>{row.description}</td>
+                      <td>
+                        <div class="row-actions">
+                          <button on:click={() => startEditEntry(row)}>✏️ ویرایش</button>
+                          <button class="danger" on:click={() => deleteEntry(row)}>🗑️ حذف</button>
+                        </div>
+                      </td>
                     </tr>
                   {/each}
                 {/if}
@@ -645,13 +722,21 @@
 
           <div class="table-wrap">
             <table>
-              <thead><tr><th>تاریخ</th><th>کاربر</th><th>پروژه</th><th>شروع</th><th>پایان</th><th>دقیقه</th><th>شرح</th></tr></thead>
+              <thead><tr><th>تاریخ</th><th>کاربر</th><th>پروژه</th><th>شروع</th><th>پایان</th><th>دقیقه</th><th>شرح</th><th>عملیات</th></tr></thead>
               <tbody>
                 {#if reportDetails.length===0}
-                  <tr><td colspan="7">داده‌ای وجود ندارد.</td></tr>
+                  <tr><td colspan="8">داده‌ای وجود ندارد.</td></tr>
                 {:else}
                   {#each reportDetails as row}
-                    <tr><td>{row.work_date_j}</td><td>{row.user_name}</td><td>{row.project_name}</td><td>{row.start_time}</td><td>{row.end_time}</td><td>{row.duration_minutes}</td><td>{row.description}</td></tr>
+                    <tr>
+                      <td>{row.work_date_j}</td><td>{row.user_name}</td><td>{row.project_name}</td><td>{row.start_time}</td><td>{row.end_time}</td><td>{row.duration_minutes}</td><td>{row.description}</td>
+                      <td>
+                        <div class="row-actions">
+                          <button on:click={() => startEditEntry(row, true)}>✏️ ویرایش</button>
+                          <button class="danger" on:click={() => deleteEntry(row)}>🗑️ حذف</button>
+                        </div>
+                      </td>
+                    </tr>
                   {/each}
                 {/if}
               </tbody>
@@ -709,6 +794,9 @@
   input,select,textarea,button{font:inherit;border:1px solid #ffc7b6;border-radius:10px;padding:10px}
   .primary{background:#fc572c;border-color:#fc572c;color:#fff;cursor:pointer}
   .actions{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+  .row-actions{display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap}
+  .row-actions button{padding:6px 8px;font-size:.9rem}
+  .danger{background:#ffe5e5;border-color:#f0b6b6;color:#9e1f1f}
   .table-wrap{overflow:auto;margin-top:10px}
   table{width:100%;border-collapse:collapse}
   th,td{border-bottom:1px solid #ffe2d8;padding:8px;text-align:right}

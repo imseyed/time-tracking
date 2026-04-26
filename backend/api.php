@@ -295,13 +295,97 @@ try {
         send(['message' => 'ثبت ساعت با موفقیت انجام شد.']);
     }
 
+    if ($action === 'entry-update' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        $auth = require_login($me);
+        $data = body();
+
+        $entryId = (int) ($data['id'] ?? 0);
+        $projectId = (int) ($data['project_id'] ?? 0);
+        $workDate = trim((string) ($data['work_date'] ?? ''));
+        $startTime = trim((string) ($data['start_time'] ?? ''));
+        $endTime = trim((string) ($data['end_time'] ?? ''));
+        $description = trim((string) ($data['description'] ?? ''));
+        $requestedUserId = (int) ($data['user_id'] ?? 0);
+
+        if ($entryId <= 0 || $projectId <= 0 || $workDate === '' || $startTime === '' || $endTime === '') {
+            send(['error' => 'اطلاعات ویرایش رکورد ناقص است.'], 422);
+        }
+
+        $entryStmt = $pdo->prepare('SELECT id, user_id FROM time_entries WHERE id = :id LIMIT 1');
+        $entryStmt->execute([':id' => $entryId]);
+        $entry = $entryStmt->fetch();
+
+        if (!$entry) {
+            send(['error' => 'رکورد مورد نظر پیدا نشد.'], 404);
+        }
+
+        $entryUserId = (int) $entry['user_id'];
+        $isAdmin = (($auth['role'] ?? '') === 'admin');
+        if (!$isAdmin && $entryUserId !== (int) $auth['id']) {
+            send(['error' => 'شما فقط می‌توانید رکوردهای خودتان را ویرایش کنید.'], 403);
+        }
+
+        $targetUserId = $isAdmin && $requestedUserId > 0 ? $requestedUserId : $entryUserId;
+
+        $duration = minutes_between($startTime, $endTime);
+        if ($duration <= 0) {
+            send(['error' => 'زمان پایان باید بعد از زمان شروع باشد.'], 422);
+        }
+
+        $stmt = $pdo->prepare('UPDATE time_entries
+            SET user_id = :user_id, project_id = :project_id, work_date = :work_date, start_time = :start_time, end_time = :end_time, description = :description, duration_minutes = :duration
+            WHERE id = :id');
+        $stmt->execute([
+            ':id' => $entryId,
+            ':user_id' => $targetUserId,
+            ':project_id' => $projectId,
+            ':work_date' => $workDate,
+            ':start_time' => $startTime,
+            ':end_time' => $endTime,
+            ':description' => $description,
+            ':duration' => $duration,
+        ]);
+
+        send(['message' => 'رکورد ساعت کاری ویرایش شد.']);
+    }
+
+    if ($action === 'entry-delete' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        $auth = require_login($me);
+        $entryId = (int) (body()['id'] ?? 0);
+
+        if ($entryId <= 0) {
+            send(['error' => 'شناسه رکورد معتبر نیست.'], 422);
+        }
+
+        $entryStmt = $pdo->prepare('SELECT id, user_id FROM time_entries WHERE id = :id LIMIT 1');
+        $entryStmt->execute([':id' => $entryId]);
+        $entry = $entryStmt->fetch();
+
+        if (!$entry) {
+            send(['error' => 'رکورد مورد نظر پیدا نشد.'], 404);
+        }
+
+        $isAdmin = (($auth['role'] ?? '') === 'admin');
+        if (!$isAdmin && (int) $entry['user_id'] !== (int) $auth['id']) {
+            send(['error' => 'شما فقط می‌توانید رکوردهای خودتان را حذف کنید.'], 403);
+        }
+
+        $stmt = $pdo->prepare('DELETE FROM time_entries WHERE id = :id');
+        $stmt->execute([':id' => $entryId]);
+
+        send(['message' => 'رکورد ساعت کاری حذف شد.']);
+    }
+
     if ($action === 'entries-recent' && $_SERVER['REQUEST_METHOD'] === 'GET') {
         $auth = require_login($me);
-        $userId = (int) ($auth['id']);
+        $requestedUserId = (int) ($_GET['user_id'] ?? 0);
+        $isAdmin = (($auth['role'] ?? '') === 'admin');
+        $userId = $isAdmin && $requestedUserId > 0 ? $requestedUserId : (int) $auth['id'];
 
-        $stmt = $pdo->prepare("SELECT te.id, te.work_date, te.start_time, te.end_time, te.duration_minutes, te.description, p.name AS project_name
+        $stmt = $pdo->prepare("SELECT te.id, te.user_id, te.project_id, te.work_date, te.start_time, te.end_time, te.duration_minutes, te.description, p.name AS project_name, u.full_name AS user_name
             FROM time_entries te
             INNER JOIN projects p ON p.id = te.project_id
+            INNER JOIN users u ON u.id = te.user_id
             WHERE te.user_id = :user_id
             ORDER BY te.work_date DESC, te.id DESC
             LIMIT 25");
@@ -342,7 +426,7 @@ try {
 
         $sqlWhere = $where ? 'WHERE ' . implode(' AND ', $where) : '';
 
-        $detailSql = "SELECT te.id, te.work_date, te.start_time, te.end_time, te.description, te.duration_minutes,
+        $detailSql = "SELECT te.id, te.user_id, te.project_id, te.work_date, te.start_time, te.end_time, te.description, te.duration_minutes,
                    u.full_name AS user_name, p.name AS project_name, p.color AS project_color
             FROM time_entries te
             INNER JOIN users u ON u.id = te.user_id
