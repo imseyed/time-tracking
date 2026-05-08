@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte'
 
-  const API_BASE = 'http://localhost:8080/api.php'
+  let API_BASE = 'http://localhost:8080/api.php' // fallback if config.js is missing
 
   let currentUser = null
   let view = 'entry'
@@ -606,6 +606,11 @@
   }
 
   onMount(async () => {
+    if (window.APP_CONFIG?.API_BASE) {
+      API_BASE = window.APP_CONFIG.API_BASE
+      console.log('[App] API_BASE loaded from config.js:', API_BASE)
+    }
+
     setDefaultReportRange()
     const raw = localStorage.getItem('tt_user')
     if (raw) {
@@ -620,7 +625,6 @@
   <main class="auth-page">
     <section class="card auth-card">
       <h1>⏱️ ورود به سامانه</h1>
-      <p>اکانت پیش‌فرض: <strong>admin / public</strong></p>
       {#if error}<div class="alert error">{error}</div>{/if}
       <form on:submit|preventDefault={doLogin}>
         <label>👤 نام کاربری <input bind:value={loginForm.username} /></label>
@@ -632,7 +636,7 @@
 {:else}
   <main class="panel">
     <aside class="sidebar">
-      <h2>🟧 Time Panel</h2>
+      <h2><img class="panel-icon" src="./favicon.svg" alt="ICO"> Time Panel</h2>
       <small>{currentUser.full_name}</small>
       <nav>
         {#each userMenu as item}
@@ -1025,5 +1029,7 @@
   .busy-overlay{position:fixed;inset:0;z-index:2200;background:rgba(0,0,0,.3);display:grid;place-items:center;gap:10px;color:#fff;font-weight:700}
   .busy-spinner{width:42px;height:42px;border-radius:50%;border:4px solid #ffffff80;border-top-color:#fff;animation:spin .8s linear infinite}
   @keyframes spin{to{transform:rotate(360deg)}}
-
+  .panel-icon{
+      width: 23px;
+  }
 </style>
