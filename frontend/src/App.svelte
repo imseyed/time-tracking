@@ -39,6 +39,8 @@
   let isSavingUser = false
   let isSavingProject = false
   let isLoadingReport = false
+  let reportReloadRequested = false
+  let activeRequests = 0
 
   const menuByRole = {
     admin: [
@@ -247,8 +249,12 @@
 
   function selectCalendarDay(day) {
     if (!day) return
+    const target = calendarTarget
     setCalendarTargetValue(`${calendarView.jy}/${pad(calendarView.jm)}/${pad(day)}`)
     closeJalaliCalendar()
+    if (target === 'from' || target === 'to') {
+      loadReport()
+    }
   }
 
   function isSelectedCalendarDay(day) {
@@ -289,6 +295,7 @@
   }, {})).sort((a, b) => Number(b.total_minutes) - Number(a.total_minutes))
   $: maxProjectMinutes = Math.max(1, ...projectChart.map((p) => Number(p.total_minutes || 0)))
   $: userMenu = currentUser ? menuByRole[currentUser.role] ?? [] : []
+  $: isBusy = activeRequests > 0 || isLoadingReport || isLoggingIn || isSubmittingEntry || isSavingEntryEdit || isSavingUser || isSavingProject
 
   function clearAlerts() { error = '' }
 
@@ -296,11 +303,37 @@
     return currentUser ? `&auth_user_id=${currentUser.id}` : ''
   }
 
+  async function trackedFetch(url, options = undefined) {
+    activeRequests += 1
+    try {
+      return await fetch(url, options)
+    } finally {
+      activeRequests = Math.max(0, activeRequests - 1)
+    }
+  }
+
+  function moveSelectByArrowKey(event, list, currentValue, setter) {
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+    if (!Array.isArray(list) || list.length === 0) return
+    event.preventDefault()
+    const ids = list.map((item) => String(item.id))
+    let idx = ids.indexOf(String(currentValue))
+    if (idx < 0) idx = 0
+    idx = event.key === 'ArrowDown'
+      ? (idx + 1) % ids.length
+      : (idx - 1 + ids.length) % ids.length
+    setter(ids[idx])
+  }
+
+  function onEntryProjectKeyDown(event) {
+    moveSelectByArrowKey(event, projects, form.project_id, (next) => { form.project_id = next })
+  }
+
   async function request(action, method = 'GET', payload = null) {
     const url = `${API_BASE}?action=${action}${method === 'GET' ? authParams() : ''}`
     const options = { method, headers: { 'Content-Type': 'application/json' } }
     if (method !== 'GET') options.body = JSON.stringify({ ...(payload || {}), auth_user_id: currentUser?.id })
-    const res = await fetch(url, options)
+    const res = await trackedFetch(url, options)
     const json = await res.json()
     if (!res.ok) throw new Error(json.error || 'خطا')
     return json
@@ -349,7 +382,7 @@
   async function loadRecentEntries() {
     const qs = new URLSearchParams({ action: 'entries-recent', auth_user_id: String(currentUser.id) })
     if (currentUser.role === 'admin' && form.user_id) qs.set('user_id', form.user_id)
-    const res = await fetch(`${API_BASE}?${qs.toString()}`)
+    const res = await trackedFetch(`${API_BASE}?${qs.toString()}`)
     const json = await res.json()
     if (!res.ok) throw new Error(json.error || 'لیست رکوردها دریافت نشد.')
     recentEntries = (json.data || []).map((r) => ({ ...r, work_date_j: gregorianToJalali(r.work_date) }))
@@ -365,7 +398,10 @@
   }
 
   async function loadReport() {
-    if (isLoadingReport) return
+    if (isLoadingReport) {
+      reportReloadRequested = true
+      return
+    }
     isLoadingReport = true
     clearAlerts()
     try {
@@ -377,7 +413,7 @@
       if (fromG) qs.set('from_date', fromG)
       if (toG) qs.set('to_date', toG)
 
-      const res = await fetch(`${API_BASE}?${qs.toString()}`)
+      const res = await trackedFetch(`${API_BASE}?${qs.toString()}`)
       const json = await res.json()
       if (!res.ok) throw new Error(json.error || 'گزارش دریافت نشد.')
 
@@ -388,6 +424,10 @@
       error = e.message
     } finally {
       isLoadingReport = false
+      if (reportReloadRequested) {
+        reportReloadRequested = false
+        await loadReport()
+      }
     }
   }
 
@@ -619,7 +659,7 @@
                 </label>
               {/if}
               <label>📁 پروژه
-                <select bind:value={form.project_id}>
+                <select bind:value={form.project_id} on:keydown={onEntryProjectKeyDown}>
                   {#each projects as p}<option value={p.id}>{p.name}</option>{/each}
                 </select>
               </label>
@@ -760,14 +800,14 @@
             <div class="grid">
               {#if currentUser.role === 'admin'}
                 <label>👤 کاربر
-                  <select bind:value={reportFilter.user_id}>
+                  <select bind:value={reportFilter.user_id} on:change={loadReport}>
                     <option value="">همه</option>
                     {#each users as u}<option value={u.id}>{u.full_name}</option>{/each}
                   </select>
                 </label>
               {/if}
               <label>📁 پروژه
-                <select bind:value={reportFilter.project_id}><option value="">همه</option>{#each projects as p}<option value={p.id}>{p.name}</option>{/each}</select>
+                <select bind:value={reportFilter.project_id} on:change={loadReport}><option value="">همه</option>{#each projects as p}<option value={p.id}>{p.name}</option>{/each}</select>
               </label>
               <label>📅 از تاریخ شمسی
                 <input
@@ -775,6 +815,7 @@
                   placeholder="1405/01/01"
                   on:focus={() => openJalaliCalendar('from')}
                   on:click={() => openJalaliCalendar('from')}
+                  on:blur={loadReport}
                 />
               </label>
               <label>📅 تا تاریخ شمسی
@@ -783,6 +824,7 @@
                   placeholder="1405/01/30"
                   on:focus={() => openJalaliCalendar('to')}
                   on:click={() => openJalaliCalendar('to')}
+                  on:blur={loadReport}
                 />
               </label>
             </div>
@@ -914,6 +956,13 @@
       </div>
     </div>
   {/if}
+
+  {#if isBusy}
+    <div class="busy-overlay">
+      <div class="busy-spinner"></div>
+      <div>در حال پردازش...</div>
+    </div>
+  {/if}
 {/if}
 
 <style>
@@ -972,5 +1021,9 @@
   .calendar-grid.days button.selected{background:#fc572c;color:#fff;border-color:#fc572c}
   .calendar-grid.days button.empty{visibility:hidden}
   .calendar-grid.days button:disabled{cursor:default}
+
+  .busy-overlay{position:fixed;inset:0;z-index:2200;background:rgba(0,0,0,.3);display:grid;place-items:center;gap:10px;color:#fff;font-weight:700}
+  .busy-spinner{width:42px;height:42px;border-radius:50%;border:4px solid #ffffff80;border-top-color:#fff;animation:spin .8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
 
 </style>
