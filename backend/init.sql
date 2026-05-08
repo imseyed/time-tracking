@@ -34,11 +34,7 @@ CREATE TABLE IF NOT EXISTS time_entries (
 
 -- default admin: admin / public
 INSERT INTO users (full_name, username, password, role) VALUES
-('مدیر سیستم', 'admin', '$2y$12$r5p9NS98a5QO3Vob086lGOUWlr9qaTdmdY5RX5nu8HkXOFtvqD2VW', 'admin'),
-('علی رضایی', 'ali', '$2y$12$r5p9NS98a5QO3Vob086lGOUWlr9qaTdmdY5RX5nu8HkXOFtvqD2VW', 'user'),
-('سارا احمدی', 'sara', '$2y$12$r5p9NS98a5QO3Vob086lGOUWlr9qaTdmdY5RX5nu8HkXOFtvqD2VW', 'user');
+('مدیر سیستم', 'admin', '$2y$12$r5p9NS98a5QO3Vob086lGOUWlr9qaTdmdY5RX5nu8HkXOFtvqD2VW', 'admin');
 
 INSERT INTO projects (name, color) VALUES
-('وب‌سایت اصلی', '#FC572C'),
-('اپ موبایل', '#FF7A45'),
-('پشتیبانی مشتریان', '#E84A24');
+('بدون پروژه', '#FC572C');
