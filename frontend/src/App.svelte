@@ -33,6 +33,9 @@
   let projectAction = 'list'
   let entryEditOpen = false
   let entryEditForm = { id: 0, user_id: 0, project_id: 0, work_date_jalali: '', start_time: '', end_time: '', description: '' }
+  let themeDialogOpen = false
+  let themePreference = 'system'
+  let systemThemeMediaQuery = null
   let isLoggingIn = false
   let isSubmittingEntry = false
   let isSavingEntryEdit = false
@@ -289,6 +292,7 @@
     const mins = total % 60
     return `${sign}${pad(hours)}:${pad(mins)}`
   }
+  const THEME_STORAGE_KEY = 'tt_theme_mode'
 
   function formatTimeToHHMM(timeValue) {
     if (!timeValue) return '-'
@@ -383,6 +387,36 @@
     if (calendarVisible) closeJalaliCalendar()
     if (entryEditOpen) closeEntryEditDialog()
     if (userAction === 'create' || userAction === 'edit') userAction = 'none'
+    if (themeDialogOpen) themeDialogOpen = false
+  }
+
+  function resolveThemeMode(mode) {
+    if (mode === 'dark') return 'dark'
+    if (mode === 'light') return 'light'
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  }
+
+  function applyTheme(mode) {
+    const resolvedMode = resolveThemeMode(mode)
+    document.documentElement.setAttribute('data-theme', resolvedMode)
+  }
+
+  function saveThemePreference() {
+    localStorage.setItem(THEME_STORAGE_KEY, themePreference)
+    applyTheme(themePreference)
+    themeDialogOpen = false
+    message = '✅ تنظیمات تم ذخیره شد.'
+  }
+
+  function loadSavedThemePreference() {
+    const saved = localStorage.getItem(THEME_STORAGE_KEY)
+    if (saved === 'light' || saved === 'dark' || saved === 'system') themePreference = saved
+    else themePreference = 'system'
+    applyTheme(themePreference)
+  }
+
+  function onSystemThemeChange() {
+    if (themePreference === 'system') applyTheme('system')
   }
 
   async function request(action, method = 'GET', payload = null) {
@@ -661,18 +695,31 @@
     await loadReport()
   }
 
-  onMount(async () => {
+  onMount(() => {
     if (window.APP_CONFIG?.API_BASE) {
       API_BASE = window.APP_CONFIG.API_BASE
       console.log('[App] API_BASE loaded from config.js:', API_BASE)
     }
 
-    setDefaultReportRange()
-    const raw = localStorage.getItem('tt_user')
-    if (raw) {
-      currentUser = JSON.parse(raw)
-      form.user_id = String(currentUser.id)
-      await loadAppData()
+    loadSavedThemePreference()
+    systemThemeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
+    if (systemThemeMediaQuery.addEventListener) systemThemeMediaQuery.addEventListener('change', onSystemThemeChange)
+    else systemThemeMediaQuery.addListener(onSystemThemeChange)
+
+    ;(async () => {
+      setDefaultReportRange()
+      const raw = localStorage.getItem('tt_user')
+      if (raw) {
+        currentUser = JSON.parse(raw)
+        form.user_id = String(currentUser.id)
+        await loadAppData()
+      }
+    })()
+
+    return () => {
+      if (!systemThemeMediaQuery) return
+      if (systemThemeMediaQuery.removeEventListener) systemThemeMediaQuery.removeEventListener('change', onSystemThemeChange)
+      else systemThemeMediaQuery.removeListener(onSystemThemeChange)
     }
   })
 </script>
@@ -701,6 +748,7 @@
           <button class:active={view === item.key} on:click={() => (view = item.key)}>{item.icon} {item.label}</button>
         {/each}
       </nav>
+      <button class="theme-btn" on:click={() => (themeDialogOpen = true)}>🎨 تنظیم تم</button>
       <button class="logout" on:click={logout}>🚪 خروج</button>
     </aside>
 
@@ -793,7 +841,7 @@
               <thead><tr><th>نام</th><th>نام کاربری</th><th>نقش</th></tr></thead>
               <tbody>
                 {#each users as u}
-                  <tr class:selected={String(u.id)===userForm.id} on:click={() => pickUser(u)}>
+                  <tr class="clickable-row" class:selected={String(u.id)===userForm.id} on:click={() => pickUser(u)}>
                     <td>{u.full_name}</td><td>{u.username}</td><td>{u.role}</td>
                   </tr>
                 {/each}
@@ -839,7 +887,7 @@
               <thead><tr><th>نام پروژه</th><th>رنگ</th></tr></thead>
               <tbody>
                 {#each projects as p}
-                  <tr class:selected={String(p.id)===projectForm.id} on:click={() => pickProject(p)}>
+                  <tr class="clickable-row" class:selected={String(p.id)===projectForm.id} on:click={() => pickProject(p)}>
                     <td><span class="project-pill" style={`background:${p.color}1a;border-color:${p.color};color:${p.color};`}>{p.name}</span></td>
                     <td><span class="dot" style={`background:${p.color}`}></span> {p.color}</td>
                   </tr>
@@ -1002,6 +1050,32 @@
     </div>
   {/if}
 
+  {#if themeDialogOpen}
+    <div class="modal-backdrop" on:click={() => (themeDialogOpen = false)}>
+      <div class="modal theme-modal" on:click|stopPropagation>
+        <h4>تنظیم تم</h4>
+        <form on:submit|preventDefault={saveThemePreference}>
+          <label class="theme-option">
+            <input type="radio" bind:group={themePreference} value="light" />
+            روشن
+          </label>
+          <label class="theme-option">
+            <input type="radio" bind:group={themePreference} value="dark" />
+            تیره
+          </label>
+          <label class="theme-option">
+            <input type="radio" bind:group={themePreference} value="system" />
+            بر اساس سیستم‌عامل
+          </label>
+          <div class="modal-actions">
+            <button class="primary" type="submit">💾 ذخیره تم</button>
+            <button type="button" on:click={() => (themeDialogOpen = false)}>لغو</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  {/if}
+
   {#if calendarVisible}
     <div class="calendar-backdrop" on:click={closeJalaliCalendar}>
       <div class="calendar-popup" on:click|stopPropagation>
@@ -1041,57 +1115,120 @@
 <style>
   @font-face { font-family: 'IRANSansX'; src: url('/fonts/IRANSansXFaNum-Medium.woff2') format('woff2'); font-weight: 500; }
   @font-face { font-family: 'IRANSansX'; src: url('/fonts/IRANSansXFaNum-ExtraBold.woff2') format('woff2'); font-weight: 800; }
-  :global(body){margin:0;font-family:'IRANSansX',Tahoma,sans-serif;background:#fff7f3;color:#333;direction:rtl}
-  .panel{display:grid;grid-template-columns:270px 1fr;min-height:100vh}
-  .sidebar{background:linear-gradient(180deg,#fc572c,#d84a24);color:#fff;padding:16px;display:flex;flex-direction:column;gap:10px}
-  .sidebar nav{display:flex;flex-direction:column;gap:8px}
-  .sidebar button{border:1px solid #ffffff4d;background:#ffffff24;color:#fff;padding:10px;border-radius:10px;text-align:right;cursor:pointer}
+  :global(:root){
+    --bg:#fff7f3;
+    --text:#333;
+    --surface:#fff;
+    --surface-border:#ffd9cc;
+    --line:#ffe2d8;
+    --input-border:#ffc7b6;
+    --sidebar-grad-start:#fc572c;
+    --sidebar-grad-end:#d84a24;
+    --sidebar-btn-bg:#ffffff24;
+    --sidebar-btn-border:#ffffff4d;
+    --sidebar-btn-text:#fff;
+    --sidebar-active-bg:#fff;
+    --sidebar-active-text:#fc572c;
+    --danger-bg:#ffe5e5;
+    --danger-border:#f0b6b6;
+    --danger-text:#9e1f1f;
+    --success-bg:#ffe4d8;
+    --success-text:#8d2c10;
+    --error-bg:#ffe8e8;
+    --error-text:#9e1f1f;
+    --chart-bg:#fff4ef;
+    --track-bg:#ffe2d8;
+    --selected-row:#fff1eb;
+    --subtle-text:#663120;
+    --subtle-text-2:#8d2c10;
+    --overlay:#00000055;
+    --overlay-soft:#0000003d;
+  }
+  :global(:root[data-theme='dark']){
+    --bg:#131517;
+    --text:#e9eaec;
+    --surface:#1d2024;
+    --surface-border:#333842;
+    --line:#2f343d;
+    --input-border:#3f4652;
+    --sidebar-grad-start:#242933;
+    --sidebar-grad-end:#171b22;
+    --sidebar-btn-bg:#ffffff14;
+    --sidebar-btn-border:#ffffff2b;
+    --sidebar-btn-text:#f3f3f3;
+    --sidebar-active-bg:#ff8b66;
+    --sidebar-active-text:#2b120a;
+    --danger-bg:#3a2327;
+    --danger-border:#6c3a43;
+    --danger-text:#ffbec8;
+    --success-bg:#2f2d22;
+    --success-text:#ffd593;
+    --error-bg:#3a2327;
+    --error-text:#ffbec8;
+    --chart-bg:#20242a;
+    --track-bg:#2d333c;
+    --selected-row:#2b3038;
+    --subtle-text:#d8dbe0;
+    --subtle-text-2:#f0c4b1;
+    --overlay:#00000099;
+    --overlay-soft:#00000080;
+  }
+  :global(body){margin:0;font-family:'IRANSansX',Tahoma,sans-serif;background:var(--bg);color:var(--text);direction:rtl}
+  .panel{display:grid;grid-template-columns:270px 1fr;height:100vh;overflow:hidden}
+  .sidebar{background:linear-gradient(180deg,var(--sidebar-grad-start),var(--sidebar-grad-end));color:#fff;padding:16px;display:flex;flex-direction:column;gap:10px;overflow:hidden}
+  .sidebar nav{display:flex;flex:1;flex-direction:column;gap:8px;min-height:0;overflow-y:auto}
+  .sidebar button{border:1px solid var(--sidebar-btn-border);background:var(--sidebar-btn-bg);color:var(--sidebar-btn-text);padding:10px;border-radius:10px;text-align:right;cursor:pointer}
   .sidebar nav button{width:100%;display:block}
-  .sidebar button.active{background:#fff;color:#fc572c;font-weight:800}
-  .logout{margin-top:auto}
-  .content{padding:20px}
-  .card{background:#fff;border:1px solid #ffd9cc;border-radius:14px;padding:16px;box-shadow:0 8px 25px #fc572c1f}
+  .sidebar button.active{background:var(--sidebar-active-bg);color:var(--sidebar-active-text);font-weight:800}
+  .theme-btn{margin-top:auto}
+  .logout{margin-top:8px}
+  .content{padding:20px;overflow-y:auto;min-height:0}
+  .card{background:var(--surface);border:1px solid var(--surface-border);border-radius:14px;padding:16px;box-shadow:0 8px 25px #00000014}
   .auth-page{min-height:100vh;display:grid;place-items:center;padding:20px}
   .auth-card{width:min(420px,100%)}
   .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
   label{display:flex;flex-direction:column;gap:5px;margin-bottom:10px}
-  input,select,textarea,button{font:inherit;border:1px solid #ffc7b6;border-radius:10px;padding:10px}
+  input,select,textarea,button{font:inherit;border:1px solid var(--input-border);border-radius:10px;padding:10px;background:var(--surface);color:var(--text)}
+  button,select,input[type='radio'],input[type='checkbox'],input[type='color'],input[type='time'],input[type='date']{cursor:pointer}
   .primary{background:#fc572c;border-color:#fc572c;color:#fff;cursor:pointer}
   .actions{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
   .row-actions{display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap}
   .row-actions button{padding:6px 8px;font-size:.9rem}
-  .danger{background:#ffe5e5;border-color:#f0b6b6;color:#9e1f1f}
+  .danger{background:var(--danger-bg);border-color:var(--danger-border);color:var(--danger-text)}
   .table-wrap{overflow:auto;margin-top:10px}
   table{width:100%;border-collapse:collapse}
-  th,td{border-bottom:1px solid #ffe2d8;padding:8px;text-align:right}
-  tr.selected{background:#fff1eb}
+  th,td{border-bottom:1px solid var(--line);padding:8px;text-align:right}
+  tr.selected{background:var(--selected-row)}
+  .clickable-row{cursor:pointer}
   .alert{padding:10px;border-radius:10px;margin-bottom:10px}
-  .success{background:#ffe4d8;color:#8d2c10}.error{background:#ffe8e8;color:#9e1f1f}
+  .success{background:var(--success-bg);color:var(--success-text)}.error{background:var(--error-bg);color:var(--error-text)}
   .dot{display:inline-block;width:12px;height:12px;border-radius:50%}
   .project-pill{display:inline-flex;align-items:center;max-width:100%;padding:3px 10px;border-radius:999px;border:1px solid;font-size:.85rem;font-weight:700;white-space:nowrap}
   .summary{display:flex;gap:20px;margin:12px 0}
-  .vchart{display:flex;gap:10px;align-items:flex-end;min-height:230px;max-width:100%;padding:10px;background:#fff4ef;border-radius:12px;overflow-x:auto;overflow-y:hidden}
+  .vchart{display:flex;gap:10px;align-items:flex-end;min-height:230px;max-width:100%;padding:10px;background:var(--chart-bg);border-radius:12px;overflow-x:auto;overflow-y:hidden}
   .vbar-col{display:flex;flex-direction:column;align-items:center;gap:6px;min-width:42px}
   .vbar{width:26px;background:#fc572c;border-radius:8px 8px 2px 2px}
-  .hchart{display:flex;flex-direction:column;gap:10px;background:#fff4ef;border-radius:12px;padding:12px;margin-top:10px;margin-bottom:12px}
-  .hchart-empty{color:#8a4a36}
+  .hchart{display:flex;flex-direction:column;gap:10px;background:var(--chart-bg);border-radius:12px;padding:12px;margin-top:10px;margin-bottom:12px}
+  .hchart-empty{color:var(--subtle-text-2)}
   .hbar-row{display:grid;grid-template-columns:minmax(130px,210px) 1fr minmax(80px,110px);gap:10px;align-items:center}
-  .hbar-label{font-size:.95rem;color:#663120}
-  .hbar-track{background:#ffe2d8;border-radius:999px;height:14px;overflow:hidden}
+  .hbar-label{font-size:.95rem;color:var(--subtle-text)}
+  .hbar-track{background:var(--track-bg);border-radius:999px;height:14px;overflow:hidden}
   .hbar-line{height:100%;border-radius:999px;transition:width .2s ease}
-  .hbar-value{text-align:left;font-size:.9rem;color:#8d2c10}
+  .hbar-value{text-align:left;font-size:.9rem;color:var(--subtle-text-2)}
 
-  .modal-backdrop{position:fixed;inset:0;background:#00000055;display:grid;place-items:center;z-index:1000}
-  .modal{width:min(680px,95vw);max-height:90vh;overflow:auto;background:#fff;border-radius:14px;padding:16px;border:1px solid #ffd9cc}
+  .modal-backdrop{position:fixed;inset:0;background:var(--overlay);display:grid;place-items:center;z-index:1000;cursor:pointer}
+  .modal{width:min(680px,95vw);max-height:90vh;overflow:auto;background:var(--surface);border-radius:14px;padding:16px;border:1px solid var(--surface-border);cursor:default}
   .modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:8px}
+  .theme-modal{width:min(420px,94vw)}
+  .theme-option{display:flex;flex-direction:row;align-items:center;gap:8px;margin:6px 0}
 
-  .calendar-backdrop{position:fixed;inset:0;background:#0000003d;display:grid;place-items:center;z-index:1200}
-  .calendar-popup{background:#fff;border:1px solid #ffd9cc;border-radius:14px;padding:12px;width:min(320px,92vw);box-shadow:0 14px 30px #00000020}
+  .calendar-backdrop{position:fixed;inset:0;background:var(--overlay-soft);display:grid;place-items:center;z-index:1200;cursor:pointer}
+  .calendar-popup{background:var(--surface);border:1px solid var(--surface-border);border-radius:14px;padding:12px;width:min(320px,92vw);box-shadow:0 14px 30px #00000020;cursor:default}
   .calendar-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
-  .calendar-head button{width:36px;height:36px;padding:0;border-radius:10px;background:#fff4ef;color:#a33f20;border:1px solid #ffc7b6;cursor:pointer}
+  .calendar-head button{width:36px;height:36px;padding:0;border-radius:10px;background:var(--chart-bg);color:#a33f20;border:1px solid var(--input-border);cursor:pointer}
   .calendar-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
-  .calendar-grid.weekdays span{display:grid;place-items:center;font-size:.85rem;color:#8a4a36}
-  .calendar-grid.days button{height:34px;border:1px solid #ffd8cb;background:#fff;border-radius:8px;cursor:pointer}
+  .calendar-grid.weekdays span{display:grid;place-items:center;font-size:.85rem;color:var(--subtle-text-2)}
+  .calendar-grid.days button{height:34px;border:1px solid var(--surface-border);background:var(--surface);border-radius:8px;cursor:pointer}
   .calendar-grid.days button.selected{background:#fc572c;color:#fff;border-color:#fc572c}
   .calendar-grid.days button.empty{visibility:hidden}
   .calendar-grid.days button:disabled{cursor:default}
