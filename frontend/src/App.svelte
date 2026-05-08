@@ -278,6 +278,55 @@
   }
 
   const toHours = (m) => (Number(m) / 60).toFixed(2)
+  const persianWeekDayNames = ['یکشنبه', 'دوشنبه', 'سه‌شنبه', 'چهارشنبه', 'پنجشنبه', 'جمعه', 'شنبه']
+
+  function formatMinutesAsHHMM(minutes) {
+    const n = Number(minutes)
+    if (!Number.isFinite(n)) return '-'
+    const sign = n < 0 ? '-' : ''
+    const total = Math.abs(Math.round(n))
+    const hours = Math.floor(total / 60)
+    const mins = total % 60
+    return `${sign}${pad(hours)}:${pad(mins)}`
+  }
+
+  function formatTimeToHHMM(timeValue) {
+    if (!timeValue) return '-'
+    const m = String(timeValue).trim().match(/^(\d{1,2}):(\d{2})/)
+    if (!m) return String(timeValue)
+    return `${pad(Number(m[1]))}:${m[2]}`
+  }
+
+  function formatJalaliDateWithWeekday(jalaliDate) {
+    if (!jalaliDate) return '-'
+    const gregorianDate = jalaliToGregorian(jalaliDate)
+    if (!gregorianDate) return jalaliDate
+    const m = gregorianDate.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+    if (!m) return jalaliDate
+    const dayIndex = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getDay()
+    const dayName = persianWeekDayNames[dayIndex] || ''
+    return dayName ? `${dayName} ${jalaliDate}` : jalaliDate
+  }
+
+  function getProjectColor(row) {
+    if (row?.project_color) return row.project_color
+    const rowProjectId = Number(row?.project_id || 0)
+    if (rowProjectId > 0) {
+      const byId = projects.find((p) => Number(p.id) === rowProjectId)
+      if (byId?.color) return byId.color
+    }
+    const rowProjectName = String(row?.project_name || '').trim()
+    if (rowProjectName) {
+      const byName = projects.find((p) => p.name === rowProjectName)
+      if (byName?.color) return byName.color
+    }
+    return '#FC572C'
+  }
+
+  function getProjectPillStyle(row) {
+    const color = getProjectColor(row)
+    return `background:${color}1a;border-color:${color};color:${color};`
+  }
   $: maxDaily = Math.max(1, ...dailyChart.map((d) => Number(d.total_minutes || 0)))
   $: projectChart = Object.values(reportDetails.reduce((acc, row) => {
     const key = String(row.project_id ?? row.project_name ?? '')
@@ -327,6 +376,13 @@
 
   function onEntryProjectKeyDown(event) {
     moveSelectByArrowKey(event, projects, form.project_id, (next) => { form.project_id = next })
+  }
+
+  function closeOpenDialogsByEscape(event) {
+    if (event.key !== 'Escape') return
+    if (calendarVisible) closeJalaliCalendar()
+    if (entryEditOpen) closeEntryEditDialog()
+    if (userAction === 'create' || userAction === 'edit') userAction = 'none'
   }
 
   async function request(action, method = 'GET', payload = null) {
@@ -621,6 +677,8 @@
   })
 </script>
 
+<svelte:window on:keydown={closeOpenDialogsByEscape} />
+
 {#if !currentUser}
   <main class="auth-page">
     <section class="card auth-card">
@@ -689,7 +747,7 @@
                 <tr>
                   <th>تاریخ</th>
                   {#if currentUser.role === 'admin'}<th>کاربر</th>{/if}
-                  <th>پروژه</th><th>شروع</th><th>پایان</th><th>دقیقه</th><th>شرح</th><th>عملیات</th>
+                  <th>پروژه</th><th>شروع</th><th>پایان</th><th>ساعت:دقیقه</th><th>شرح</th><th>عملیات</th>
                 </tr>
               </thead>
               <tbody>
@@ -698,9 +756,13 @@
                 {:else}
                   {#each recentEntries as row}
                     <tr>
-                      <td>{row.work_date_j}</td>
+                      <td>{formatJalaliDateWithWeekday(row.work_date_j)}</td>
                       {#if currentUser.role === 'admin'}<td>{row.user_name}</td>{/if}
-                      <td>{row.project_name}</td><td>{row.start_time}</td><td>{row.end_time}</td><td>{row.duration_minutes}</td><td>{row.description}</td>
+                      <td><span class="project-pill" style={getProjectPillStyle(row)}>{row.project_name}</span></td>
+                      <td>{formatTimeToHHMM(row.start_time)}</td>
+                      <td>{formatTimeToHHMM(row.end_time)}</td>
+                      <td>{formatMinutesAsHHMM(row.duration_minutes)}</td>
+                      <td>{row.description}</td>
                       <td>
                         <div class="row-actions">
                           <button on:click={() => openEntryEditDialog(row)}>✏️ ویرایش</button>
@@ -778,7 +840,8 @@
               <tbody>
                 {#each projects as p}
                   <tr class:selected={String(p.id)===projectForm.id} on:click={() => pickProject(p)}>
-                    <td>{p.name}</td><td><span class="dot" style={`background:${p.color}`}></span> {p.color}</td>
+                    <td><span class="project-pill" style={`background:${p.color}1a;border-color:${p.color};color:${p.color};`}>{p.name}</span></td>
+                    <td><span class="dot" style={`background:${p.color}`}></span> {p.color}</td>
                   </tr>
                 {/each}
               </tbody>
@@ -869,14 +932,20 @@
 
           <div class="table-wrap">
             <table>
-              <thead><tr><th>تاریخ</th><th>کاربر</th><th>پروژه</th><th>شروع</th><th>پایان</th><th>دقیقه</th><th>شرح</th><th>عملیات</th></tr></thead>
+              <thead><tr><th>تاریخ</th><th>کاربر</th><th>پروژه</th><th>شروع</th><th>پایان</th><th>ساعت:دقیقه</th><th>شرح</th><th>عملیات</th></tr></thead>
               <tbody>
                 {#if reportDetails.length===0}
                   <tr><td colspan="8">داده‌ای وجود ندارد.</td></tr>
                 {:else}
                   {#each reportDetails as row}
                     <tr>
-                      <td>{row.work_date_j}</td><td>{row.user_name}</td><td>{row.project_name}</td><td>{row.start_time}</td><td>{row.end_time}</td><td>{row.duration_minutes}</td><td>{row.description}</td>
+                      <td>{formatJalaliDateWithWeekday(row.work_date_j)}</td>
+                      <td>{row.user_name}</td>
+                      <td><span class="project-pill" style={getProjectPillStyle(row)}>{row.project_name}</span></td>
+                      <td>{formatTimeToHHMM(row.start_time)}</td>
+                      <td>{formatTimeToHHMM(row.end_time)}</td>
+                      <td>{formatMinutesAsHHMM(row.duration_minutes)}</td>
+                      <td>{row.description}</td>
                       <td>
                         <div class="row-actions">
                           <button on:click={() => openEntryEditDialog(row)}>✏️ ویرایش</button>
@@ -999,6 +1068,7 @@
   .alert{padding:10px;border-radius:10px;margin-bottom:10px}
   .success{background:#ffe4d8;color:#8d2c10}.error{background:#ffe8e8;color:#9e1f1f}
   .dot{display:inline-block;width:12px;height:12px;border-radius:50%}
+  .project-pill{display:inline-flex;align-items:center;max-width:100%;padding:3px 10px;border-radius:999px;border:1px solid;font-size:.85rem;font-weight:700;white-space:nowrap}
   .summary{display:flex;gap:20px;margin:12px 0}
   .vchart{display:flex;gap:10px;align-items:flex-end;min-height:230px;max-width:100%;padding:10px;background:#fff4ef;border-radius:12px;overflow-x:auto;overflow-y:hidden}
   .vbar-col{display:flex;flex-direction:column;align-items:center;gap:6px;min-width:42px}
