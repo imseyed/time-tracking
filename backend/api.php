@@ -146,8 +146,8 @@ try {
         if ($newPassword !== $confirmPassword) {
             send(['error' => 'رمز جدید و تکرار آن یکسان نیست.'], 422);
         }
-        if (mb_strlen($newPassword) < 6) {
-            send(['error' => 'رمز جدید باید حداقل 6 کاراکتر باشد.'], 422);
+        if (mb_strlen($newPassword) < 4) {
+            send(['error' => 'رمز جدید باید حداقل 4 کاراکتر باشد.'], 422);
         }
 
         $stmt = $pdo->prepare('SELECT password FROM users WHERE id = :id LIMIT 1');

@@ -488,6 +488,9 @@
       if (!passwordForm.current_password || !passwordForm.new_password || !passwordForm.confirm_password) {
         throw new Error('تمام فیلدهای تغییر رمز الزامی است.')
       }
+      if (passwordForm.new_password.length < 4) {
+        throw new Error('رمز جدید باید حداقل 4 کاراکتر باشد.')
+      }
       if (passwordForm.new_password !== passwordForm.confirm_password) {
         throw new Error('رمز جدید و تکرار آن یکسان نیست.')
       }
