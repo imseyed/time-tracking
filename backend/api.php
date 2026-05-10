@@ -39,6 +39,21 @@ function minutes_between(string $start, string $end): int
     return (int) round(($e - $s) / 60);
 }
 
+function parse_ymd_date(string $value): ?DateTimeImmutable
+{
+    $trimmed = trim($value);
+    if ($trimmed === '') {
+        return null;
+    }
+
+    $date = DateTimeImmutable::createFromFormat('Y-m-d', $trimmed);
+    if (!$date || $date->format('Y-m-d') !== $trimmed) {
+        return null;
+    }
+
+    return $date;
+}
+
 function current_user(PDO $pdo): ?array
 {
     $authUserId = (int) ($_GET['auth_user_id'] ?? 0);
@@ -116,6 +131,43 @@ try {
         require_admin($auth);
         $rows = $pdo->query('SELECT id, full_name, username, role, created_at FROM users ORDER BY id DESC')->fetchAll();
         send(['data' => $rows]);
+    }
+
+    if ($action === 'change-password' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        $auth = require_login($me);
+        $data = body();
+        $currentPassword = trim((string) ($data['current_password'] ?? ''));
+        $newPassword = trim((string) ($data['new_password'] ?? ''));
+        $confirmPassword = trim((string) ($data['confirm_password'] ?? ''));
+
+        if ($currentPassword === '' || $newPassword === '' || $confirmPassword === '') {
+            send(['error' => 'تمام فیلدهای تغییر رمز الزامی است.'], 422);
+        }
+        if ($newPassword !== $confirmPassword) {
+            send(['error' => 'رمز جدید و تکرار آن یکسان نیست.'], 422);
+        }
+        if (mb_strlen($newPassword) < 6) {
+            send(['error' => 'رمز جدید باید حداقل 6 کاراکتر باشد.'], 422);
+        }
+
+        $stmt = $pdo->prepare('SELECT password FROM users WHERE id = :id LIMIT 1');
+        $stmt->execute([':id' => (int) $auth['id']]);
+        $user = $stmt->fetch();
+
+        if (!$user || !password_verify($currentPassword, (string) $user['password'])) {
+            send(['error' => 'رمز فعلی نادرست است.'], 422);
+        }
+        if (password_verify($newPassword, (string) $user['password'])) {
+            send(['error' => 'رمز جدید باید با رمز فعلی متفاوت باشد.'], 422);
+        }
+
+        $update = $pdo->prepare('UPDATE users SET password = :password WHERE id = :id');
+        $update->execute([
+            ':id' => (int) $auth['id'],
+            ':password' => password_hash($newPassword, PASSWORD_BCRYPT),
+        ]);
+
+        send(['message' => 'رمز عبور با موفقیت تغییر کرد.']);
     }
 
     if ($action === 'user-create' && $_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -399,6 +451,18 @@ try {
         $projectId = (int) ($_GET['project_id'] ?? 0);
         $fromDate = trim((string) ($_GET['from_date'] ?? ''));
         $toDate = trim((string) ($_GET['to_date'] ?? ''));
+        $fromDateObj = parse_ymd_date($fromDate);
+        $toDateObj = parse_ymd_date($toDate);
+
+        if ($fromDate !== '' && !$fromDateObj) {
+            send(['error' => 'فرمت تاریخ شروع معتبر نیست.'], 422);
+        }
+        if ($toDate !== '' && !$toDateObj) {
+            send(['error' => 'فرمت تاریخ پایان معتبر نیست.'], 422);
+        }
+        if ($fromDateObj && $toDateObj && $fromDateObj > $toDateObj) {
+            send(['error' => 'تاریخ شروع باید قبل یا مساوی تاریخ پایان باشد.'], 422);
+        }
 
         $where = [];
         $params = [];
@@ -445,7 +509,34 @@ try {
             ORDER BY te.work_date ASC";
         $dailyStmt = $pdo->prepare($dailySql);
         $dailyStmt->execute($params);
-        $daily = $dailyStmt->fetchAll();
+        $dailyRows = $dailyStmt->fetchAll();
+
+        $dailyMap = [];
+        foreach ($dailyRows as $row) {
+            $dateKey = (string) ($row['work_date'] ?? '');
+            if ($dateKey === '') {
+                continue;
+            }
+            $dailyMap[$dateKey] = (int) ($dailyMap[$dateKey] ?? 0) + (int) ($row['total_minutes'] ?? 0);
+        }
+
+        $daily = [];
+        if ($fromDateObj && $toDateObj) {
+            for ($cursor = $fromDateObj; $cursor <= $toDateObj; $cursor = $cursor->modify('+1 day')) {
+                $dateKey = $cursor->format('Y-m-d');
+                $daily[] = [
+                    'work_date' => $dateKey,
+                    'total_minutes' => (int) ($dailyMap[$dateKey] ?? 0),
+                ];
+            }
+        } else {
+            foreach ($dailyRows as $row) {
+                $daily[] = [
+                    'work_date' => (string) $row['work_date'],
+                    'total_minutes' => (int) $row['total_minutes'],
+                ];
+            }
+        }
 
         $totalMinutes = array_sum(array_map(static fn(array $row): int => (int) $row['duration_minutes'], $details));
 

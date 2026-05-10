@@ -35,12 +35,15 @@
   let entryEditForm = { id: 0, user_id: 0, project_id: 0, work_date_jalali: '', start_time: '', end_time: '', description: '' }
   let themeDialogOpen = false
   let themePreference = 'system'
+  let passwordDialogOpen = false
+  let passwordForm = { current_password: '', new_password: '', confirm_password: '' }
   let systemThemeMediaQuery = null
   let isLoggingIn = false
   let isSubmittingEntry = false
   let isSavingEntryEdit = false
   let isSavingUser = false
   let isSavingProject = false
+  let isChangingPassword = false
   let isLoadingReport = false
   let reportReloadRequested = false
   let activeRequests = 0
@@ -312,6 +315,11 @@
     return dayName ? `${dayName} ${jalaliDate}` : jalaliDate
   }
 
+  function getJalaliDayLabel(jalaliDate) {
+    const p = parseJalaliDate(jalaliDate)
+    return p ? pad(p.jd) : jalaliDate
+  }
+
   function getProjectColor(row) {
     if (row?.project_color) return row.project_color
     const rowProjectId = Number(row?.project_id || 0)
@@ -348,7 +356,7 @@
   }, {})).sort((a, b) => Number(b.total_minutes) - Number(a.total_minutes))
   $: maxProjectMinutes = Math.max(1, ...projectChart.map((p) => Number(p.total_minutes || 0)))
   $: userMenu = currentUser ? menuByRole[currentUser.role] ?? [] : []
-  $: isBusy = activeRequests > 0 || isLoadingReport || isLoggingIn || isSubmittingEntry || isSavingEntryEdit || isSavingUser || isSavingProject
+  $: isBusy = activeRequests > 0 || isLoadingReport || isLoggingIn || isSubmittingEntry || isSavingEntryEdit || isSavingUser || isSavingProject || isChangingPassword
 
   function clearAlerts() { error = '' }
 
@@ -386,6 +394,7 @@
     if (event.key !== 'Escape') return
     if (calendarVisible) closeJalaliCalendar()
     if (entryEditOpen) closeEntryEditDialog()
+    if (passwordDialogOpen) closePasswordDialog()
     if (userAction === 'create' || userAction === 'edit') userAction = 'none'
     if (themeDialogOpen) themeDialogOpen = false
   }
@@ -405,7 +414,13 @@
     localStorage.setItem(THEME_STORAGE_KEY, themePreference)
     applyTheme(themePreference)
     themeDialogOpen = false
-    message = '✅ تنظیمات تم ذخیره شد.'
+    message = '✅ تم به‌روزرسانی شد.'
+  }
+
+  function chooseTheme(mode) {
+    if (!['light', 'dark', 'system'].includes(mode)) return
+    themePreference = mode
+    saveThemePreference()
   }
 
   function loadSavedThemePreference() {
@@ -450,8 +465,40 @@
   function logout() {
     currentUser = null
     localStorage.removeItem('tt_user')
+    closePasswordDialog()
     message = ''
     error = ''
+  }
+
+  function openPasswordDialog() {
+    passwordForm = { current_password: '', new_password: '', confirm_password: '' }
+    passwordDialogOpen = true
+  }
+
+  function closePasswordDialog() {
+    passwordDialogOpen = false
+    passwordForm = { current_password: '', new_password: '', confirm_password: '' }
+  }
+
+  async function changePassword() {
+    if (isChangingPassword) return
+    isChangingPassword = true
+    clearAlerts()
+    try {
+      if (!passwordForm.current_password || !passwordForm.new_password || !passwordForm.confirm_password) {
+        throw new Error('تمام فیلدهای تغییر رمز الزامی است.')
+      }
+      if (passwordForm.new_password !== passwordForm.confirm_password) {
+        throw new Error('رمز جدید و تکرار آن یکسان نیست.')
+      }
+      await request('change-password', 'POST', passwordForm)
+      closePasswordDialog()
+      message = '✅ رمز عبور با موفقیت تغییر کرد.'
+    } catch (e) {
+      error = e.message
+    } finally {
+      isChangingPassword = false
+    }
   }
 
   async function loadUsers() {
@@ -508,7 +555,11 @@
       if (!res.ok) throw new Error(json.error || 'گزارش دریافت نشد.')
 
       reportDetails = (json.details || []).map((r) => ({ ...r, work_date_j: gregorianToJalali(r.work_date) }))
-      dailyChart = (json.daily_chart || []).map((d) => ({ ...d, work_date_j: gregorianToJalali(d.work_date) }))
+      dailyChart = (json.daily_chart || []).map((d) => ({
+        work_date: d.work_date,
+        total_minutes: Number(d.total_minutes || 0),
+        work_date_j: gregorianToJalali(d.work_date)
+      }))
       summary = json.summary || summary
     } catch (e) {
       error = e.message
@@ -748,6 +799,7 @@
           <button class:active={view === item.key} on:click={() => (view = item.key)}>{item.icon} {item.label}</button>
         {/each}
       </nav>
+      <button on:click={openPasswordDialog}>🔐 تغییر رمز عبور</button>
       <button class="theme-btn" on:click={() => (themeDialogOpen = true)}>🎨 تنظیم تم</button>
       <button class="logout" on:click={logout}>🚪 خروج</button>
     </aside>
@@ -951,9 +1003,10 @@
           <h4>نمودار عمودی ساعت روزانه</h4>
           <div class="vchart">
             {#each dailyChart as d}
-              <div class="vbar-col" title={`${d.work_date_j} - ${toHours(d.total_minutes)}h`}>
+              <div class="vbar-col" title={`${d.work_date_j} - ${formatMinutesAsHHMM(d.total_minutes)}`}>
+                <small class="vbar-value">{formatMinutesAsHHMM(d.total_minutes)}</small>
                 <div class="vbar" style={`height:${Math.max(8, (Number(d.total_minutes) / maxDaily) * 180)}px`}></div>
-                <small>{d.work_date_j.split('/').slice(1).join('/')}</small>
+                <small>{getJalaliDayLabel(d.work_date_j)}</small>
               </div>
             {/each}
           </div>
@@ -1050,28 +1103,47 @@
     </div>
   {/if}
 
+  {#if passwordDialogOpen}
+    <div class="modal-backdrop" on:click={closePasswordDialog}>
+      <div class="modal theme-modal" on:click|stopPropagation>
+        <h4>تغییر رمز عبور</h4>
+        <form on:submit|preventDefault={changePassword}>
+          <label>رمز فعلی <input type="password" bind:value={passwordForm.current_password} /></label>
+          <label>رمز جدید <input type="password" bind:value={passwordForm.new_password} /></label>
+          <label>تکرار رمز جدید <input type="password" bind:value={passwordForm.confirm_password} /></label>
+          <div class="modal-actions">
+            <button class="primary" type="submit" disabled={isChangingPassword}>💾 ثبت تغییرات</button>
+            <button type="button" on:click={closePasswordDialog}>لغو</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  {/if}
+
   {#if themeDialogOpen}
     <div class="modal-backdrop" on:click={() => (themeDialogOpen = false)}>
       <div class="modal theme-modal" on:click|stopPropagation>
         <h4>تنظیم تم</h4>
-        <form on:submit|preventDefault={saveThemePreference}>
-          <label class="theme-option">
-            <input type="radio" bind:group={themePreference} value="light" />
-            روشن
-          </label>
-          <label class="theme-option">
-            <input type="radio" bind:group={themePreference} value="dark" />
-            تیره
-          </label>
-          <label class="theme-option">
-            <input type="radio" bind:group={themePreference} value="system" />
-            بر اساس سیستم‌عامل
-          </label>
-          <div class="modal-actions">
-            <button class="primary" type="submit">💾 ذخیره تم</button>
-            <button type="button" on:click={() => (themeDialogOpen = false)}>لغو</button>
-          </div>
-        </form>
+        <div class="theme-option-grid">
+          <button
+            type="button"
+            class="theme-choice"
+            class:active={themePreference === 'system'}
+            on:click={() => chooseTheme('system')}
+          >خودکار (سیستم)</button>
+          <button
+            type="button"
+            class="theme-choice"
+            class:active={themePreference === 'light'}
+            on:click={() => chooseTheme('light')}
+          >روشن</button>
+          <button
+            type="button"
+            class="theme-choice"
+            class:active={themePreference === 'dark'}
+            on:click={() => chooseTheme('dark')}
+          >تیره</button>
+        </div>
       </div>
     </div>
   {/if}
@@ -1207,6 +1279,7 @@
   .summary{display:flex;gap:20px;margin:12px 0}
   .vchart{display:flex;gap:10px;align-items:flex-end;min-height:230px;max-width:100%;padding:10px;background:var(--chart-bg);border-radius:12px;overflow-x:auto;overflow-y:hidden}
   .vbar-col{display:flex;flex-direction:column;align-items:center;gap:6px;min-width:42px}
+  .vbar-value{font-size:.75rem;color:var(--subtle-text-2)}
   .vbar{width:26px;background:#fc572c;border-radius:8px 8px 2px 2px}
   .hchart{display:flex;flex-direction:column;gap:10px;background:var(--chart-bg);border-radius:12px;padding:12px;margin-top:10px;margin-bottom:12px}
   .hchart-empty{color:var(--subtle-text-2)}
@@ -1220,7 +1293,9 @@
   .modal{width:min(680px,95vw);max-height:90vh;overflow:auto;background:var(--surface);border-radius:14px;padding:16px;border:1px solid var(--surface-border);cursor:default}
   .modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:8px}
   .theme-modal{width:min(420px,94vw)}
-  .theme-option{display:flex;flex-direction:row;align-items:center;gap:8px;margin:6px 0}
+  .theme-option-grid{display:grid;grid-template-columns:1fr;gap:10px;margin-top:8px}
+  .theme-choice{padding:14px 12px;border:1px solid var(--input-border);background:var(--surface);font-weight:700;text-align:center}
+  .theme-choice.active{border-color:#fc572c;background:#fc572c;color:#fff}
 
   .calendar-backdrop{position:fixed;inset:0;background:var(--overlay-soft);display:grid;place-items:center;z-index:1200;cursor:pointer}
   .calendar-popup{background:var(--surface);border:1px solid var(--surface-border);border-radius:14px;padding:12px;width:min(320px,92vw);box-shadow:0 14px 30px #00000020;cursor:default}
