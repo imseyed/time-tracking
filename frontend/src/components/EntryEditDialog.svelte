@@ -36,8 +36,8 @@
               on:click={() => onOpenJalaliCalendar('edit')}
             />
           </label>
-          <label>🕒 شروع <input type="time" bind:value={entryEditForm.start_time} /></label>
-          <label>🕕 پایان <input type="time" bind:value={entryEditForm.end_time} /></label>
+          <label>🕒 شروع <input type="time" step="60" bind:value={entryEditForm.start_time} /></label>
+          <label>🕕 پایان <input type="time" step="60" bind:value={entryEditForm.end_time} /></label>
         </div>
         <label>📝 شرح کار <textarea rows="3" bind:value={entryEditForm.description} /></label>
         <div class="modal-actions">

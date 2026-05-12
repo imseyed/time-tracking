@@ -41,8 +41,8 @@
           on:click={() => onOpenJalaliCalendar('entry')}
         />
       </label>
-      <label>🕒 شروع <input type="time" bind:value={form.start_time} /></label>
-      <label>🕕 پایان <input type="time" bind:value={form.end_time} /></label>
+      <label>🕒 شروع <input type="time" step="60" bind:value={form.start_time} /></label>
+      <label>🕕 پایان <input type="time" step="60" bind:value={form.end_time} /></label>
     </div>
     <label>📝 شرح کار <textarea rows="3" bind:value={form.description} /></label>
     <button class="primary" type="submit" disabled={isSubmittingEntry}>💾 ثبت ساعت</button>
